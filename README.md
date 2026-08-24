@@ -1,6 +1,8 @@
 # Wirebang
 
-A node graph for one-shot SFX. Written in Odin. Preview is live through miniaudio. Default game export is a baked WAV.
+A node graph for one-shot SFX, written in Odin. The graph is the source of truth. Preview and in-game playback share one voice.
+
+The artifact you check in is a `Patch` — Odin you can play live or bake at load. WAV export is an escape hatch if you do not want the DSP in the game.
 
 ## License
 
@@ -29,9 +31,7 @@ The editor draws with raylib and plays through miniaudio. It does not call rayli
 1. Add nodes from the left palette (oscillator, noise, filter, gain, shaper, panner).
 2. Click an output jack, then an input jack, to cable them. Right-click a cable to cut it.
 3. Select a node and drag its knobs (Shift = fine). Space plays the patch.
-4. **Bake** writes a WAV plus an Odin wrapper to `export/`. **Live** writes a playable `Patch` instead.
-
-The graph is the source of truth. Preview and bake share one voice, so Space and the exported sample are the same synth.
+4. **Live** writes a playable `Patch` to `export/`. **Bake** writes a WAV if you would rather drop a sample on an existing loader.
 
 The current graph is saved to `wirebang-patch.json`.
 
@@ -45,28 +45,31 @@ bin/play whoosh
 
 ## Use in a game
 
-Baked one-shots are just samples. Drop the WAV onto whatever you already use:
-
-- miniaudio `ma_decoder` / `ma_sound_init_from_file`
-- raylib `LoadSound` / `LoadWaveFromMemory` next to existing music
-
-You do not need the Wirebang DSP in a shipped game if you bake.
-
-Live playback is opt-in. Link `wirebang` and call `wb.play(patch)` (or `wb.play(&engine, patch)` if you already have a `ma.engine`). A raylib game can keep `InitAudioDevice` for music and still open a Wirebang engine for live one-shots. Shared-mode devices usually allow both. One engine for all audio is cleaner when you can do it.
+Drop the exported Odin next to `wirebang` and call `make_*`. Same patch, two uses:
 
 ```odin
 import wb "wirebang"
 
 wb.init()
-wb.play(patch)
+p := make_zap()
+defer wb.destroy_patch(&p)
+
+wb.play(p)           // live, jitter per play
+pcm := wb.bake(p)     // or bake once at load, then play the buffer
+delete(pcm)
+
 wb.wait_until_quiet()
 wb.shutdown()
 ```
 
+`wb.play(&engine, p)` if you already have a `ma.engine`. A raylib game can keep `InitAudioDevice` for music and still open a Wirebang engine for live one-shots. Shared-mode devices usually allow both. One engine for all audio is cleaner when you can do it.
+
 `sounds/` is the example library (Zap, Thump, Whoosh). Treat those files the same way as anything you export: use them, change them, or ignore them.
+
+WAV is optional. If you do not want to link the DSP, Bake and play the file with whatever you already use (`ma_decoder`, raylib `LoadSound`).
 
 ## Scope
 
-In: short procedural SFX, live preview, baked WAV export, optional live Odin patch export.
+In: short procedural SFX, live preview, Odin patch export, optional WAV bake.
 
 Out: a DAW, sample playback engine, or a shipped mixer.

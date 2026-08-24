@@ -419,6 +419,11 @@ sanitize_fn_name :: proc(name: string, allocator := context.allocator) -> string
 	return strings.join(parts[:], "_", allocator)
 }
 
+set_owned_string :: proc(dst: ^string, value: string, allocator := context.allocator) {
+	delete(dst^)
+	dst^ = strings.clone(value, allocator)
+}
+
 ident :: proc(name, id: string, allocator := context.allocator) -> string {
 	base := make([dynamic]u8, context.temp_allocator)
 	src := name if name != "" else id
@@ -446,13 +451,32 @@ empty_patch :: proc(allocator := context.allocator) -> Patch {
 	p.fn_name = strings.clone("play_sound", allocator)
 	p.nodes = make([dynamic]Graph_Node, allocator)
 	p.edges = make([dynamic]Graph_Edge, allocator)
-	append(&p.nodes, Graph_Node{id = "out", kind = .Out, x = 720, y = 220, name = "out"})
+	append(&p.nodes, Graph_Node{id = strings.clone("out", allocator), kind = .Out, x = 720, y = 220, name = strings.clone("out", allocator)})
 	return p
+}
+
+destroy_node_strings :: proc(n: Graph_Node) {
+	delete(n.id)
+	delete(n.name)
+}
+
+destroy_edge_strings :: proc(e: Graph_Edge) {
+	delete(e.id)
+	delete(e.from)
+	delete(e.to)
 }
 
 destroy_patch :: proc(p: ^Patch) {
 	if p == nil {
 		return
+	}
+	delete(p.name)
+	delete(p.fn_name)
+	for n in p.nodes {
+		destroy_node_strings(n)
+	}
+	for e in p.edges {
+		destroy_edge_strings(e)
 	}
 	delete(p.nodes)
 	delete(p.edges)
@@ -487,12 +511,27 @@ clone_patch :: proc(src: Patch, allocator := context.allocator) -> Patch {
 
 patch_from_slices :: proc(name, fn_name: string, nodes: []Graph_Node, edges: []Graph_Edge, allocator := context.allocator) -> Patch {
 	p: Patch
-	p.name = name
-	p.fn_name = fn_name
+	p.name = strings.clone(name, allocator)
+	p.fn_name = strings.clone(fn_name, allocator)
 	p.nodes = make([dynamic]Graph_Node, len(nodes), allocator)
 	p.edges = make([dynamic]Graph_Edge, len(edges), allocator)
-	copy(p.nodes[:], nodes)
-	copy(p.edges[:], edges)
+	for n, i in nodes {
+		p.nodes[i] = Graph_Node {
+			id     = strings.clone(n.id, allocator),
+			kind   = n.kind,
+			x      = n.x,
+			y      = n.y,
+			name   = strings.clone(n.name, allocator),
+			params = n.params,
+		}
+	}
+	for e, i in edges {
+		p.edges[i] = Graph_Edge {
+			id   = strings.clone(e.id, allocator),
+			from = strings.clone(e.from, allocator),
+			to   = strings.clone(e.to, allocator),
+		}
+	}
 	return p
 }
 
@@ -646,7 +685,7 @@ add_node :: proc(patch: ^Patch, kind: Node_Kind, x, y: f32, allocator := context
 		}
 	}
 	taken := taken_ids(patch^, context.temp_allocator)
-	id := "out" if kind == .Out else uid(kind_key(kind), taken, allocator)
+	id := strings.clone("out", allocator) if kind == .Out else uid(kind_key(kind), taken, allocator)
 	node := Graph_Node {
 		id     = id,
 		kind   = kind,
@@ -665,6 +704,7 @@ remove_node :: proc(patch: ^Patch, id: string) {
 	}
 	for i := 0; i < len(patch.nodes); i += 1 {
 		if patch.nodes[i].id == id {
+			destroy_node_strings(patch.nodes[i])
 			ordered_remove(&patch.nodes, i)
 			break
 		}
@@ -672,6 +712,7 @@ remove_node :: proc(patch: ^Patch, id: string) {
 	for i := len(patch.edges) - 1; i >= 0; i -= 1 {
 		e := patch.edges[i]
 		if e.from == id || e.to == id {
+			destroy_edge_strings(e)
 			ordered_remove(&patch.edges, i)
 		}
 	}
@@ -707,6 +748,7 @@ connect :: proc(patch: ^Patch, from, to: string, allocator := context.allocator)
 disconnect :: proc(patch: ^Patch, edge_id: string) {
 	for i := 0; i < len(patch.edges); i += 1 {
 		if patch.edges[i].id == edge_id {
+			destroy_edge_strings(patch.edges[i])
 			ordered_remove(&patch.edges, i)
 			return
 		}

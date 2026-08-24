@@ -271,7 +271,7 @@ voice_from_patch :: proc(patch: Patch, sample_rate: f32 = DEFAULT_SAMPLE_RATE, a
 		}
 	}
 
-	// Process sources before processors: plan already ranks that way.
+	// plan_patch Kahn-sorts so inputs are ticked before dependents.
 	return v
 }
 

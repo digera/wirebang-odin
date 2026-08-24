@@ -226,7 +226,64 @@ plan_patch :: proc(patch: Patch, allocator := context.allocator) -> Plan {
 			append(&plan.edges, e)
 		}
 	}
+	sorted := topo_sort_plan(plan.nodes[:], plan.edges[:], allocator)
+	delete(plan.nodes)
+	plan.nodes = sorted
 	return plan
+}
+
+// Kahn sort so voice_tick sees inputs before dependents. kind_rank pre-order
+// is preserved among ready nodes, so source-then-processor stays the default.
+@(private)
+topo_sort_plan :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator := context.allocator) -> [dynamic]Planned_Node {
+	n := len(nodes)
+	out := make([dynamic]Planned_Node, 0, n, allocator)
+	if n == 0 {
+		return out
+	}
+
+	index_of := make(map[string]int, context.temp_allocator)
+	for node, i in nodes {
+		index_of[node.id] = i
+	}
+	indeg := make([]int, n, context.temp_allocator)
+	succs := make([][dynamic]int, n, context.temp_allocator)
+	for i in 0 ..< n {
+		succs[i] = make([dynamic]int, context.temp_allocator)
+	}
+	for e in edges {
+		fi, fok := index_of[e.from]
+		ti, tok := index_of[e.to]
+		if fok && tok {
+			append(&succs[fi], ti)
+			indeg[ti] += 1
+		}
+	}
+
+	used := make([]bool, n, context.temp_allocator)
+	for len(out) < n {
+		pick := -1
+		for i in 0 ..< n {
+			if !used[i] && indeg[i] == 0 {
+				pick = i
+				break
+			}
+		}
+		if pick < 0 {
+			for i in 0 ..< n {
+				if !used[i] {
+					append(&out, nodes[i])
+				}
+			}
+			break
+		}
+		used[pick] = true
+		append(&out, nodes[pick])
+		for t in succs[pick] {
+			indeg[t] -= 1
+		}
+	}
+	return out
 }
 
 var_name :: proc(node: Graph_Node, used: ^map[string]bool, allocator := context.allocator) -> string {

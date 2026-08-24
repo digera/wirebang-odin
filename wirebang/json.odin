@@ -7,7 +7,7 @@ import "core:strings"
 
 encode_patch :: proc(patch: Patch, allocator := context.allocator) -> []u8 {
 	b := strings.builder_make(allocator)
-	fmt.sbprintf(&b, "{{\n  \"name\": %q,\n  \"fnName\": %q,\n  \"nodes\": [\n", patch.name, patch.fn_name)
+	fmt.sbprintf(&b, "{{\n  \"version\": 1,\n  \"name\": %q,\n  \"fnName\": %q,\n  \"nodes\": [\n", patch.name, patch.fn_name)
 	for n, i in patch.nodes {
 		fmt.sbprintf(&b, "    {{\n      \"id\": %q,\n      \"kind\": %q,\n      \"x\": %g,\n      \"y\": %g,\n      \"name\": %q,\n      \"params\": {{", n.id, kind_key(n.kind), n.x, n.y, n.name)
 		write_params_json(&b, n)
@@ -127,6 +127,12 @@ decode_patch :: proc(data: []u8, allocator := context.allocator) -> (Patch, bool
 	if !rok {
 		return {}, false
 	}
+	if v, vok := root["version"]; vok {
+		if n, nok := json_f32(v); nok && n > 1 {
+			return {}, false
+		}
+	}
+
 	p: Patch
 	p.name = strings.clone(obj_str(root, "name", "Untitled"), allocator)
 	p.fn_name = strings.clone(obj_str(root, "fnName", "play_sound"), allocator)

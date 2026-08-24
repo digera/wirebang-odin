@@ -1,5 +1,6 @@
 package wirebang
 
+import "core:strings"
 import "core:testing"
 
 @(test)
@@ -15,9 +16,9 @@ test_sanitize_fn_name :: proc(t: ^testing.T) {
 test_asset_file_name :: proc(t: ^testing.T) {
 	p := empty_patch()
 	defer destroy_patch(&p)
-	p.fn_name = "play_frost_nova"
+	set_owned_string(&p.fn_name, "play_frost_nova")
 	testing.expect_value(t, asset_file_name(p), "frost_nova.odin")
-	p.fn_name = "play_zap"
+	set_owned_string(&p.fn_name, "play_zap")
 	testing.expect_value(t, asset_file_name(p), "zap.odin")
 	testing.expect_value(t, asset_file_name(p, "wav"), "zap.wav")
 }
@@ -38,12 +39,12 @@ test_is_patch_rejects_bad :: proc(t: ^testing.T) {
 
 	dup := empty_patch()
 	defer destroy_patch(&dup)
-	append(&dup.nodes, Graph_Node{id = "out", kind = .Gain, x = 0, y = 0, name = "g", params = Gain_Params{}})
+	append(&dup.nodes, Graph_Node{id = strings.clone("out"), kind = .Gain, x = 0, y = 0, name = strings.clone("g"), params = Gain_Params{}})
 	testing.expect(t, !is_patch(dup))
 
 	dangling := empty_patch()
 	defer destroy_patch(&dangling)
-	append(&dangling.edges, Graph_Edge{id = "e_1", from = "osc_1", to = "out"})
+	append(&dangling.edges, Graph_Edge{id = strings.clone("e_1"), from = strings.clone("osc_1"), to = strings.clone("out")})
 	testing.expect(t, !is_patch(dangling))
 }
 

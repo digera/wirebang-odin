@@ -130,6 +130,9 @@ source_loop :: proc "c" (_: ^ma.data_source, _: b32) -> ma.result {
 	return .INVALID_OPERATION
 }
 
+// init, play, reap, and shutdown are main-thread only. The audio callback
+// ticks voices; do not destroy a slot from another thread.
+
 init :: proc() -> bool {
 	if g_inited {
 		return true

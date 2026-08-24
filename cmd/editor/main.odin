@@ -355,14 +355,14 @@ draw :: proc(app: ^App) {
 	if rl.GuiTextBox({220, 14, 140, 30}, cstr(app.name_buf[:]), i32(len(app.name_buf)), app.name_edit) {
 		app.name_edit = !app.name_edit
 		if !app.name_edit {
-			app.patch.name = strings.clone(string(cstr(app.name_buf[:])))
+			wb.set_owned_string(&app.patch.name, string(cstr(app.name_buf[:])))
 			persist(app)
 		}
 	}
 	if rl.GuiTextBox({370, 14, 150, 30}, cstr(app.fn_buf[:]), i32(len(app.fn_buf)), app.fn_edit) {
 		app.fn_edit = !app.fn_edit
 		if !app.fn_edit {
-			app.patch.fn_name = wb.sanitize_fn_name(string(cstr(app.fn_buf[:])))
+			wb.set_owned_string(&app.patch.fn_name, wb.sanitize_fn_name(string(cstr(app.fn_buf[:])), context.temp_allocator))
 			write_cstr(app.fn_buf[:], app.patch.fn_name)
 			persist(app)
 			refresh_code(app)
@@ -493,10 +493,11 @@ draw_inspector :: proc(app: ^App, r: rl.Rectangle) {
 		if rl.GuiTextBox({r.x + 14, r.y + 64, r.width - 28, 28}, cstr(app.node_name_buf[:]), i32(len(app.node_name_buf)), app.node_name_edit) {
 			app.node_name_edit = !app.node_name_edit
 			if !app.node_name_edit {
-				n.name = strings.clone(string(cstr(app.node_name_buf[:])))
-				if n.name == "" {
-					n.name = strings.clone(wb.kind_key(n.kind))
+				name := string(cstr(app.node_name_buf[:]))
+				if name == "" {
+					name = wb.kind_key(n.kind)
 				}
+				wb.set_owned_string(&n.name, name)
 				persist(app)
 				refresh_code(app)
 			}
@@ -583,7 +584,7 @@ draw_inspector :: proc(app: ^App, r: rl.Rectangle) {
 draw_code :: proc(app: ^App, r: rl.Rectangle) {
 	rl.DrawLine(i32(r.x), i32(r.y), i32(r.x + r.width), i32(r.y), LINE)
 	rl.DrawText("LIVE ODIN", i32(r.x + 14), i32(r.y + 10), 12, MUTED)
-	rl.DrawText("Bake writes WAV + wrapper to export/", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
+	rl.DrawText("Live writes a Patch. Bake is a WAV fallback.", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
 	src := app.code
 	if len(src) > 1800 {
 		src = src[:1800]

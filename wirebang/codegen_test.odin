@@ -15,6 +15,7 @@ test_json_roundtrip_zap :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(got.nodes), len(p.nodes))
 	testing.expect_value(t, len(got.edges), len(p.edges))
 	testing.expect(t, is_patch(got))
+	testing.expect(t, strings_contains(string(data), "\"version\": 1"))
 }
 
 @(test)
