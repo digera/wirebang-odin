@@ -19,7 +19,6 @@ Auto_Event :: struct {
 }
 
 Voice_Node :: struct {
-	id:         string,
 	kind:       Node_Kind,
 	osc_type:   Osc_Type,
 	phase:      f32,
@@ -27,7 +26,6 @@ Voice_Node :: struct {
 	gain:       [dynamic]Auto_Event,
 	start_time: f32,
 	stop_time:  f32,
-	has_window: bool,
 	noise:      []f32,
 	noise_pos:  int,
 	filter:     Filter_Type,
@@ -40,6 +38,7 @@ Voice_Node :: struct {
 	pan:        f32,
 	inputs:     [dynamic]int,
 	to_out:     bool,
+	stereo:     bool,
 	mono:       f32,
 	left:       f32,
 	right:      f32,
@@ -189,51 +188,56 @@ make_noise_buffer :: proc(duration, sample_rate: f32, allocator := context.alloc
 	return data
 }
 
-voice_from_patch :: proc(patch: Patch, sample_rate: f32 = DEFAULT_SAMPLE_RATE, allocator := context.allocator) -> Voice {
-	plan := plan_patch(patch, context.temp_allocator)
+voice_from_plan :: proc(plan: Plan, sample_rate: f32 = DEFAULT_SAMPLE_RATE, allocator := context.allocator) -> Voice {
+	order := topo_order(plan, context.temp_allocator)
+	n := len(order)
+	old_to_new := make([]int, max(len(plan.nodes), 1), context.temp_allocator)
+	for old_idx, new_i in order {
+		if old_idx >= 0 && old_idx < len(old_to_new) {
+			old_to_new[old_idx] = new_i
+		}
+	}
+
 	v: Voice
 	v.sample_rate = sample_rate
-	v.length = u64(math.ceil(f64(patch_duration(patch) * sample_rate)))
-	v.nodes = make([]Voice_Node, len(plan.nodes), allocator)
+	v.length = u64(math.ceil(f64(plan_duration(plan) * sample_rate)))
+	v.nodes = make([]Voice_Node, n, allocator)
 
-	index_of := make(map[string]int, context.temp_allocator)
-	for planned, i in plan.nodes {
-		index_of[planned.id] = i
-		n := &v.nodes[i]
-		n.id = planned.id
-		n.inputs = make([dynamic]int, allocator)
+	for new_i in 0 ..< n {
+		planned := plan.nodes[order[new_i]]
+		vn := &v.nodes[new_i]
+		vn.inputs = make([dynamic]int, allocator)
+		vn.freq = make([dynamic]Auto_Event, allocator)
+		vn.gain = make([dynamic]Auto_Event, allocator)
 		switch planned.create.kind {
 		case .Osc:
-			n.kind = .Osc
-			n.osc_type = planned.create.osc
-			n.has_window = true
+			vn.kind = .Osc
+			vn.osc_type = planned.create.osc
 		case .Noise:
-			n.kind = .Noise
-			n.noise = make_noise_buffer(planned.create.duration, sample_rate, allocator)
-			n.has_window = true
+			vn.kind = .Noise
+			vn.noise = make_noise_buffer(planned.create.duration, sample_rate, allocator)
 		case .Filter:
-			n.kind = .Filter
-			n.filter = planned.create.filter
-			n.q = planned.create.q
+			vn.kind = .Filter
+			vn.filter = planned.create.filter
+			vn.q = planned.create.q
 		case .Gain:
-			n.kind = .Gain
+			vn.kind = .Gain
 		case .Shaper:
-			n.kind = .Shaper
-			n.amount = planned.create.amount
+			vn.kind = .Shaper
+			vn.amount = planned.create.amount
 		case .Panner:
-			n.kind = .Panner
-			n.pan = planned.create.pan
+			vn.kind = .Panner
+			vn.pan = planned.create.pan
+			vn.stereo = true
 		}
-		n.freq = make([dynamic]Auto_Event, allocator)
-		n.gain = make([dynamic]Auto_Event, allocator)
 		for a in planned.actions {
 			switch a.kind {
 			case .Set:
 				ev := Auto_Event{time = a.time, value = eval_num(a.value), kind = .Set}
 				if a.param == .Frequency {
-					append(&n.freq, ev)
+					append(&vn.freq, ev)
 				} else {
-					append(&n.gain, ev)
+					append(&vn.gain, ev)
 				}
 			case .Ramp:
 				ev := Auto_Event {
@@ -242,48 +246,57 @@ voice_from_patch :: proc(patch: Patch, sample_rate: f32 = DEFAULT_SAMPLE_RATE, a
 					kind  = a.curve == .Lin ? .Lin : .Exp,
 				}
 				if a.param == .Frequency {
-					append(&n.freq, ev)
+					append(&vn.freq, ev)
 				} else {
-					append(&n.gain, ev)
+					append(&vn.gain, ev)
 				}
 			case .Start:
-				n.start_time = a.time
+				vn.start_time = a.time
 			case .Stop:
-				n.stop_time = a.time
+				vn.stop_time = a.time
 			}
 		}
-		if n.kind == .Filter {
-			set_biquad(n, eval_param(n.freq[:], 0, 1000), sample_rate)
+		if vn.kind == .Filter {
+			set_biquad(vn, eval_param(vn.freq[:], 0, 1000), sample_rate)
 		}
 	}
 
 	for e in plan.edges {
-		if e.to == "out" {
-			if i, ok := index_of[e.from]; ok {
-				v.nodes[i].to_out = true
-			}
+		if e.from < 0 || e.from >= len(plan.nodes) {
 			continue
 		}
-		from_i, fok := index_of[e.from]
-		to_i, tok := index_of[e.to]
-		if fok && tok {
-			append(&v.nodes[to_i].inputs, from_i)
+		from_n := old_to_new[e.from]
+		if e.to < 0 {
+			v.nodes[from_n].to_out = true
+			continue
 		}
+		if e.to >= len(plan.nodes) {
+			continue
+		}
+		to_n := old_to_new[e.to]
+		append(&v.nodes[to_n].inputs, from_n)
 	}
-
-	// plan_patch Kahn-sorts so inputs are ticked before dependents.
 	return v
 }
 
+voice_from_patch :: proc(patch: Patch, sample_rate: f32 = DEFAULT_SAMPLE_RATE, allocator := context.allocator) -> Voice {
+	plan := plan_patch(patch, context.temp_allocator)
+	return voice_from_plan(plan, sample_rate, allocator)
+}
+
 @(private)
-mix_inputs :: proc(v: ^Voice, n: Voice_Node) -> f32 {
+mix_inputs :: proc(v: ^Voice, n: ^Voice_Node) -> f32 {
 	if len(n.inputs) == 0 {
 		return 0
 	}
 	sum: f32
 	for i in n.inputs {
-		in_n := v.nodes[i]
-		sum += (in_n.left + in_n.right) * 0.5
+		in_n := &v.nodes[i]
+		if in_n.stereo {
+			sum += (in_n.left + in_n.right) * 0.5
+		} else {
+			sum += in_n.mono
+		}
 	}
 	return sum
 }
@@ -307,8 +320,6 @@ voice_tick :: proc(v: ^Voice) -> (left, right: f32, ok: bool) {
 			n.mono = osc_sample(n.osc_type, n.phase)
 			n.phase += freq / v.sample_rate
 			n.phase -= math.floor(n.phase)
-			n.left = n.mono
-			n.right = n.mono
 		case .Noise:
 			if t + 1e-9 < n.start_time || t >= n.stop_time {
 				break
@@ -317,34 +328,30 @@ voice_tick :: proc(v: ^Voice) -> (left, right: f32, ok: bool) {
 				n.mono = n.noise[n.noise_pos]
 				n.noise_pos += 1
 			}
-			n.left = n.mono
-			n.right = n.mono
 		case .Filter:
-			x := mix_inputs(v, n)
+			x := mix_inputs(v, &n)
 			freq := eval_param(n.freq[:], t, n.last_freq)
 			if abs(freq - n.last_freq) > 0.5 {
 				set_biquad(&n, freq, v.sample_rate)
 			}
 			n.mono = biquad_tick(&n, x)
-			n.left = n.mono
-			n.right = n.mono
 		case .Gain:
-			x := mix_inputs(v, n)
-			g := eval_param(n.gain[:], t, 1)
+			x := mix_inputs(v, &n)
+			g := eval_param(n.gain[:], t, 0)
 			n.mono = x * g
-			n.left = n.mono
-			n.right = n.mono
 		case .Shaper:
-			x := mix_inputs(v, n)
+			x := mix_inputs(v, &n)
 			n.mono = distortion_curve(n.amount, clamp(x, -1, 1))
-			n.left = n.mono
-			n.right = n.mono
 		case .Panner:
-			x := mix_inputs(v, n)
+			x := mix_inputs(v, &n)
 			angle := (n.pan + 1) * (math.PI * 0.25)
 			n.left = x * math.cos(angle)
 			n.right = x * math.sin(angle)
 		case .Out:
+		}
+		if !n.stereo {
+			n.left = n.mono
+			n.right = n.mono
 		}
 	}
 	for n in v.nodes {

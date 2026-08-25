@@ -1,8 +1,8 @@
 # Wirebang
 
-A node graph for one-shot SFX, written in Odin. The graph is the source of truth. Preview and in-game playback share one voice.
+A node graph for one-shot SFX, written in Odin. The graph is the editor. The Odin it emits is the sound.
 
-The artifact you check in is a `Patch` — Odin you can play live or bake at load. WAV export is an escape hatch if you do not want the DSP in the game.
+Preview, Live export, and in-game playback run the same dialect: a `play_*` procedure that builds oscillators, filters, and cables. There is no `Patch` table in the exported file. WAV is a fallback if you do not want the DSP in the game.
 
 ## License
 
@@ -16,6 +16,7 @@ Requires [Odin](https://odin-lang.org/) with `vendor:miniaudio` and `vendor:rayl
 
 ```bash
 odin test wirebang
+odin run cmd/sync_sounds
 odin build cmd/play -out:bin/play.exe
 odin build cmd/editor -out:bin/editor.exe
 ```
@@ -31,9 +32,9 @@ The editor draws with raylib and plays through miniaudio. It does not call rayli
 1. Add nodes from the left palette (oscillator, noise, filter, gain, shaper, panner).
 2. Click an output jack, then an input jack, to cable them. Right-click a cable to cut it.
 3. Select a node and drag its knobs (Shift = fine). Space plays the patch.
-4. **Live** writes a playable `Patch` to `export/`. **Bake** writes a WAV if you would rather drop a sample on an existing loader.
+4. **Live** writes a `play_*` procedure to `export/`. **Bake** writes a WAV if you would rather drop a sample on an existing loader.
 
-The current graph is saved to `wirebang-patch.json`.
+The current graph is saved to `wirebang-patch.json` (editor only). Drop an exported `.odin` in `sounds/` and pick it from the library to reopen the graph from the code.
 
 ## Play from the command line
 
@@ -45,24 +46,21 @@ bin/play whoosh
 
 ## Use in a game
 
-Drop the exported Odin next to `wirebang` and call `make_*`. Same patch, two uses:
+Drop the exported Odin next to `wirebang` and call `play_*`:
 
 ```odin
 import wb "wirebang"
+import sfx "export" // or copy play_zap into your tree
 
 wb.init()
-p := make_zap()
-defer wb.destroy_patch(&p)
-
-wb.play(p)           // live, jitter per play
-pcm := wb.bake(p)     // or bake once at load, then play the buffer
-delete(pcm)
-
+play_zap()
 wb.wait_until_quiet()
 wb.shutdown()
 ```
 
-`wb.play(&engine, p)` if you already have a `ma.engine`. A raylib game can keep `InitAudioDevice` for music and still open a Wirebang engine for live one-shots. Shared-mode devices usually allow both. One engine for all audio is cleaner when you can do it.
+`play_zap(&engine)` if you already have a `ma.engine`. A raylib game can keep `InitAudioDevice` for music and still open a Wirebang engine for live one-shots. Shared-mode devices usually allow both. One engine for all audio is cleaner when you can do it.
+
+Handwritten files in the same dialect (`wb.osc`, `wb.connect`, …) reopen as graphs. Arbitrary Odin that wanders off-dialect will not.
 
 `sounds/` is the example library (Zap, Thump, Whoosh). Treat those files the same way as anything you export: use them, change them, or ignore them.
 
@@ -70,6 +68,6 @@ WAV is optional. If you do not want to link the DSP, Bake and play the file with
 
 ## Scope
 
-In: short procedural SFX, live preview, Odin patch export, optional WAV bake.
+In: short procedural SFX, live preview, Odin play-proc export, optional WAV bake.
 
 Out: a DAW, sample playback engine, or a shipped mixer.

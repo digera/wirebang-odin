@@ -2,7 +2,7 @@
 
 Example one-shots used by the editor library and `cmd/play`.
 
-Each file exposes `make_*` (a `wirebang.Patch`) and `play_*` (live miniaudio playback). Drop them in a game the same way as a Live export: call `make_*`, then `wb.play` or `wb.bake`.
+Each file is a Live export: a `play_*` procedure in the Wirebang dialect. No node-graph tables. Drop them in a game and call `play_zap` (or thump, whoosh). The editor can parse these files back into a graph.
 
 Generated or copied files are yours. You may copyright them and ship them in a closed-source project. No attribution required.
 

@@ -8,8 +8,6 @@ test_zap_plan_order :: proc(t: ^testing.T) {
 	defer destroy_patch(&p)
 	plan := plan_patch(p)
 	defer destroy_plan(&plan)
-	testing.expect(t, plan.uses_noise)
-	testing.expect(t, plan.uses_shaper)
 	want := [?]string{"noise_1", "noise_2", "osc_1", "filter_1", "shaper_1", "gain_1", "filter_2", "gain_2", "gain_3"}
 	testing.expect_value(t, len(plan.nodes), len(want))
 	for id, i in want {

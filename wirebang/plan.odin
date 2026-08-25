@@ -2,6 +2,7 @@ package wirebang
 
 import "core:fmt"
 import "core:math/rand"
+import "core:strings"
 
 Create_Kind :: enum {
 	Osc,
@@ -55,11 +56,15 @@ Planned_Node :: struct {
 	actions: [dynamic]Action,
 }
 
+// to == -1 means the patch output.
+Plan_Edge :: struct {
+	from: int,
+	to:   int,
+}
+
 Plan :: struct {
-	nodes:       [dynamic]Planned_Node,
-	edges:       [dynamic]Graph_Edge,
-	uses_noise:  bool,
-	uses_shaper: bool,
+	nodes: [dynamic]Planned_Node,
+	edges: [dynamic]Plan_Edge,
 }
 
 jittered :: proc(value, jitter: f32) -> f32 {
@@ -108,11 +113,11 @@ plan_node :: proc(node: Graph_Node, allocator := context.allocator) -> (Planned_
 	case .Osc:
 		p := node.params.(Osc_Params)
 		delay := p.delay
-		dur := max(f32(0.005), p.duration if p.duration != 0 else 0.04)
+		dur := max(f32(0.005), p.duration)
 		t0 := at_time(delay)
 		t1 := at_time(delay + dur)
-		append(&out.actions, Action{kind = .Set, param = .Frequency, value = {value = p.freq if p.freq != 0 else 180, jitter = p.jitter}, time = t0})
-		if p.freq_end > 0 {
+		append(&out.actions, Action{kind = .Set, param = .Frequency, value = {value = p.freq, jitter = p.jitter}, time = t0})
+		if p.freq_end > 0 && p.freq_end != p.freq {
 			end := Num_Expr{value = p.freq_end, jitter = p.jitter, max_exp = p.ramp != .Lin}
 			append(&out.actions, Action{kind = .Ramp, param = .Frequency, value = end, time = t1, curve = p.ramp})
 		}
@@ -123,15 +128,14 @@ plan_node :: proc(node: Graph_Node, allocator := context.allocator) -> (Planned_
 	case .Noise:
 		p := node.params.(Noise_Params)
 		delay := p.delay
-		dur := max(f32(0.005), p.duration if p.duration != 0 else 0.025)
+		dur := max(f32(0.005), p.duration)
 		out.create = Create_Op{kind = .Noise, duration = dur}
 		append(&out.actions, Action{kind = .Start, time = at_time(delay)})
 		append(&out.actions, Action{kind = .Stop, time = at_time(delay + dur)})
 		return out, true
 	case .Filter:
 		p := node.params.(Filter_Params)
-		freq := p.freq if p.freq != 0 else 1000
-		append(&out.actions, Action{kind = .Set, param = .Frequency, value = {value = freq, jitter = p.jitter}, time = 0})
+		append(&out.actions, Action{kind = .Set, param = .Frequency, value = {value = p.freq, jitter = p.jitter}, time = 0})
 		if p.freq_end > 0 && p.ramp_time > 0 {
 			append(
 				&out.actions,
@@ -144,20 +148,19 @@ plan_node :: proc(node: Graph_Node, allocator := context.allocator) -> (Planned_
 				},
 			)
 		}
-		out.create = Create_Op{kind = .Filter, filter = p.type, q = p.q if p.q != 0 else 1}
+		out.create = Create_Op{kind = .Filter, filter = p.type, q = p.q}
 		return out, true
 	case .Gain:
 		p := node.params.(Gain_Params)
 		delay := p.delay
-		dur := max(f32(0.005), p.duration if p.duration != 0 else 0.03)
-		peak := p.peak if p.peak != 0 else 0.2
+		dur := max(f32(0.005), p.duration)
 		out.create = Create_Op{kind = .Gain}
-		append(&out.actions, Action{kind = .Set, param = .Gain, value = {value = peak, jitter = p.jitter, max_exp = true}, time = at_time(delay)})
+		append(&out.actions, Action{kind = .Set, param = .Gain, value = {value = p.peak, jitter = p.jitter, max_exp = true}, time = at_time(delay)})
 		append(&out.actions, Action{kind = .Ramp, param = .Gain, value = {value = 0.001}, time = at_time(delay + dur), curve = .Exp})
 		return out, true
 	case .Shaper:
 		p := node.params.(Shaper_Params)
-		out.create = Create_Op{kind = .Shaper, amount = p.amount if p.amount != 0 else 6}
+		out.create = Create_Op{kind = .Shaper, amount = p.amount}
 		return out, true
 	case .Panner:
 		p := node.params.(Panner_Params)
@@ -200,18 +203,13 @@ plan_patch :: proc(patch: Patch, allocator := context.allocator) -> Plan {
 
 	plan: Plan
 	plan.nodes = make([dynamic]Planned_Node, allocator)
-	plan.edges = make([dynamic]Graph_Edge, allocator)
+	plan.edges = make([dynamic]Plan_Edge, allocator)
 
 	known := make(map[string]bool, context.temp_allocator)
+	out_ids := make(map[string]bool, context.temp_allocator)
 	for idx in order {
 		node := patch.nodes[idx]
 		if planned, ok := plan_node(node, allocator); ok {
-			if planned.create.kind == .Noise {
-				plan.uses_noise = true
-			}
-			if planned.create.kind == .Shaper {
-				plan.uses_shaper = true
-			}
 			known[planned.id] = true
 			append(&plan.nodes, planned)
 		}
@@ -219,23 +217,46 @@ plan_patch :: proc(patch: Patch, allocator := context.allocator) -> Plan {
 	for n in patch.nodes {
 		if n.kind == .Out {
 			known[n.id] = true
+			out_ids[n.id] = true
 		}
 	}
+
+	string_edges := make([dynamic]Graph_Edge, context.temp_allocator)
 	for e in patch.edges {
 		if e.from in known && e.to in known {
-			append(&plan.edges, e)
+			append(&string_edges, e)
 		}
 	}
-	sorted := topo_sort_plan(plan.nodes[:], plan.edges[:], allocator)
+
+	sorted := topo_sort_named(plan.nodes[:], string_edges[:], allocator)
 	delete(plan.nodes)
 	plan.nodes = sorted
+
+	index_of := make(map[string]int, context.temp_allocator)
+	for n, i in plan.nodes {
+		index_of[n.id] = i
+	}
+	for e in string_edges {
+		fi, fok := index_of[e.from]
+		if !fok {
+			continue
+		}
+		if e.to in out_ids {
+			append(&plan.edges, Plan_Edge{from = fi, to = -1})
+			continue
+		}
+		ti, tok := index_of[e.to]
+		if tok {
+			append(&plan.edges, Plan_Edge{from = fi, to = ti})
+		}
+	}
 	return plan
 }
 
 // Kahn sort so voice_tick sees inputs before dependents. kind_rank pre-order
 // is preserved among ready nodes, so source-then-processor stays the default.
 @(private)
-topo_sort_plan :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator := context.allocator) -> [dynamic]Planned_Node {
+topo_sort_named :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator := context.allocator) -> [dynamic]Planned_Node {
 	n := len(nodes)
 	out := make([dynamic]Planned_Node, 0, n, allocator)
 	if n == 0 {
@@ -286,24 +307,78 @@ topo_sort_plan :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator := 
 	return out
 }
 
+plan_duration :: proc(plan: Plan) -> f32 {
+	max_t: f32 = 0.05
+	for n in plan.nodes {
+		if n.create.kind == .Noise {
+			max_t = max(max_t, n.create.duration)
+		}
+		for a in n.actions {
+			max_t = max(max_t, a.time)
+		}
+	}
+	return max_t + 0.02
+}
+
+// Returns old-indices in tick order (inputs before dependents).
+@(private)
+topo_order :: proc(plan: Plan, allocator := context.temp_allocator) -> []int {
+	n := len(plan.nodes)
+	order := make([dynamic]int, 0, n, allocator)
+	if n == 0 {
+		return order[:]
+	}
+	indeg := make([]int, n, context.temp_allocator)
+	succs := make([][dynamic]int, n, context.temp_allocator)
+	for i in 0 ..< n {
+		succs[i] = make([dynamic]int, context.temp_allocator)
+	}
+	for e in plan.edges {
+		if e.from < 0 || e.from >= n {
+			continue
+		}
+		if e.to >= 0 && e.to < n {
+			append(&succs[e.from], e.to)
+			indeg[e.to] += 1
+		}
+	}
+	used := make([]bool, n, context.temp_allocator)
+	for len(order) < n {
+		pick := -1
+		for i in 0 ..< n {
+			if !used[i] && indeg[i] == 0 {
+				pick = i
+				break
+			}
+		}
+		if pick < 0 {
+			for i in 0 ..< n {
+				if !used[i] {
+					append(&order, i)
+				}
+			}
+			break
+		}
+		used[pick] = true
+		append(&order, pick)
+		for t in succs[pick] {
+			indeg[t] -= 1
+		}
+	}
+	return order[:]
+}
+
 var_name :: proc(node: Graph_Node, used: ^map[string]bool, allocator := context.allocator) -> string {
 	base := ident(node.name, node.id, context.temp_allocator)
 	if base not_in used^ {
 		used[base] = true
-		return strings_clone(base, allocator)
+		return strings.clone(base, allocator)
 	}
 	for i := 2; ; i += 1 {
 		name := fmt.tprintf("%s%d", base, i)
 		if name not_in used^ {
 			used[name] = true
-			return strings_clone(name, allocator)
+			return strings.clone(name, allocator)
 		}
 	}
-}
-
-@(private)
-strings_clone :: proc(s: string, allocator := context.allocator) -> string {
-	out := make([]u8, len(s), allocator)
-	copy(out, s)
-	return string(out)
 }

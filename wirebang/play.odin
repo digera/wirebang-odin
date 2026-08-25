@@ -6,6 +6,9 @@ import "base:runtime"
 import "core:time"
 import ma "vendor:miniaudio"
 
+Engine :: ma.engine
+Build_Proc :: proc(ctx: ^Ctx)
+
 MAX_PLAYING :: 32
 
 Voice_Source :: struct {
@@ -201,6 +204,8 @@ release_slot :: proc(slot: ^Playing_Sound) {
 play :: proc {
 	play_patch,
 	play_patch_engine,
+	play_build,
+	play_build_engine,
 }
 
 play_patch :: proc(patch: Patch) -> bool {
@@ -210,10 +215,41 @@ play_patch :: proc(patch: Patch) -> bool {
 	return play_patch_engine(g_engine, patch)
 }
 
-play_patch_engine :: proc(eng: ^ma.engine, patch: Patch) -> bool {
+play_patch_engine :: proc(eng: ^Engine, patch: Patch) -> bool {
 	if eng == nil {
 		return play_patch(patch)
 	}
+	rate := f32(ma.engine_get_sample_rate(eng))
+	if rate <= 0 {
+		rate = DEFAULT_SAMPLE_RATE
+	}
+	return play_voice(eng, voice_from_patch(patch, rate))
+}
+
+play_build :: proc(build: Build_Proc) -> bool {
+	if !g_inited && !init() {
+		return false
+	}
+	return play_build_engine(g_engine, build)
+}
+
+play_build_engine :: proc(eng: ^Engine, build: Build_Proc) -> bool {
+	if eng == nil {
+		return play_build(build)
+	}
+	ctx: Ctx
+	ctx_init(&ctx)
+	defer ctx_destroy(&ctx)
+	build(&ctx)
+	rate := f32(ma.engine_get_sample_rate(eng))
+	if rate <= 0 {
+		rate = DEFAULT_SAMPLE_RATE
+	}
+	return play_voice(eng, voice_from_plan(ctx.plan, rate))
+}
+
+@(private)
+play_voice :: proc(eng: ^Engine, voice: Voice) -> bool {
 	reap()
 	slot: ^Playing_Sound
 	for &s in g_playing {
@@ -224,14 +260,12 @@ play_patch_engine :: proc(eng: ^ma.engine, patch: Patch) -> bool {
 	}
 	if slot == nil {
 		fmt.eprintf("wirebang: too many overlapping one-shots\n")
+		v := voice
+		destroy_voice(&v)
 		return false
 	}
 
-	rate := f32(ma.engine_get_sample_rate(eng))
-	if rate <= 0 {
-		rate = DEFAULT_SAMPLE_RATE
-	}
-	slot.source.voice = voice_from_patch(patch, rate)
+	slot.source.voice = voice
 	cfg := ma.data_source_config_init()
 	cfg.vtable = &voice_vtable
 	if ma.data_source_init(&cfg, cast(^ma.data_source)&slot.source.base) != .SUCCESS {

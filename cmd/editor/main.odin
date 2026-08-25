@@ -137,7 +137,7 @@ refresh_code :: proc(app: ^App) {
 	if app.code != "" {
 		delete(app.code)
 	}
-	app.code = wb.emit_live(app.patch)
+	app.code = wb.generate_code(app.patch)
 }
 
 set_status :: proc(app: ^App, s: string) {
@@ -375,7 +375,18 @@ draw :: proc(app: ^App) {
 	if app.library_i != prev && app.library_i > 0 {
 		entry := wb.LIBRARY[app.library_i - 1]
 		wb.destroy_patch(&app.patch)
-		app.patch = entry.patch()
+		loaded := false
+		path := fmt.tprintf("sounds/%s.odin", entry.id)
+		if data, err := os.read_entire_file(path, context.allocator); err == nil {
+			if parsed, pok := wb.parse_code(string(data)); pok {
+				app.patch = parsed
+				loaded = true
+			}
+			delete(data)
+		}
+		if !loaded {
+			app.patch = entry.patch()
+		}
 		app.selected = "out"
 		app.cable_from = ""
 		sync_name_bufs(app)
@@ -389,9 +400,9 @@ draw :: proc(app: ^App) {
 		set_status(app, "Playing")
 	}
 	if button({758, 14, 70, 30}, "Bake") {
-		wav, odin_path, ok := wb.write_baked_files(app.patch, EXPORT_DIR)
+		path, ok := wb.write_baked_wav(app.patch, EXPORT_DIR)
 		if ok {
-			set_status(app, fmt.tprintf("Wrote %s and %s", wav, odin_path))
+			set_status(app, fmt.tprintf("Wrote %s", path))
 		} else {
 			set_status(app, "Bake failed")
 		}
@@ -583,8 +594,8 @@ draw_inspector :: proc(app: ^App, r: rl.Rectangle) {
 
 draw_code :: proc(app: ^App, r: rl.Rectangle) {
 	rl.DrawLine(i32(r.x), i32(r.y), i32(r.x + r.width), i32(r.y), LINE)
-	rl.DrawText("LIVE ODIN", i32(r.x + 14), i32(r.y + 10), 12, MUTED)
-	rl.DrawText("Live writes a Patch. Bake is a WAV fallback.", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
+	rl.DrawText("PLAY PROC", i32(r.x + 14), i32(r.y + 10), 12, MUTED)
+	rl.DrawText("Dialect Odin. Live writes the play proc. Bake is a WAV fallback.", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
 	src := app.code
 	if len(src) > 1800 {
 		src = src[:1800]

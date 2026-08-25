@@ -1,5 +1,6 @@
 package wirebang
 
+import "core:os"
 import "core:testing"
 
 @(test)
@@ -19,23 +20,51 @@ test_json_roundtrip_zap :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_emit_live_contains_play :: proc(t: ^testing.T) {
+test_generate_code_is_play_proc :: proc(t: ^testing.T) {
 	p := library_whoosh()
 	defer destroy_patch(&p)
-	src := emit_live(p)
+	src := generate_code(p)
 	defer delete(src)
 	testing.expect(t, strings_contains(src, "play_whoosh"))
 	testing.expect(t, strings_contains(src, "wb.play"))
+	testing.expect(t, strings_contains(src, "wb.noise"))
+	testing.expect(t, !strings_contains(src, "Graph_Node"))
+	testing.expect(t, !strings_contains(src, "ZAP_NODES"))
+	testing.expect(t, !strings_contains(src, "patch_from_slices"))
 }
 
 @(test)
-test_emit_baked_loads_wav :: proc(t: ^testing.T) {
-	p := library_thump()
-	defer destroy_patch(&p)
-	src := emit_baked(p, "thump.wav")
-	defer delete(src)
-	testing.expect(t, strings_contains(src, "#load(\"thump.wav\")"))
-	testing.expect(t, strings_contains(src, "THUMP_PATCH"))
+test_parse_sounds_zap_file :: proc(t: ^testing.T) {
+	data, err := os.read_entire_file("sounds/zap.odin", context.allocator)
+	if err != nil {
+		testing.expect(t, false, "sounds/zap.odin missing — run odin run cmd/sync_sounds")
+		return
+	}
+	defer delete(data)
+	got, ok := parse_code(string(data))
+	defer destroy_patch(&got)
+	testing.expect(t, ok)
+	testing.expect(t, is_patch(got))
+	testing.expect(t, len(got.nodes) > 2)
+}
+
+@(test)
+test_parse_roundtrip_library :: proc(t: ^testing.T) {
+	for entry in LIBRARY {
+		p := entry.patch()
+		defer destroy_patch(&p)
+		src := generate_code(p, {package_name = "sounds", import_path = "../wirebang"})
+		defer delete(src)
+		got, ok := parse_code(src)
+		defer destroy_patch(&got)
+		testing.expectf(t, ok, "%s failed to parse", entry.label)
+		if !ok {
+			continue
+		}
+		testing.expect_value(t, len(got.nodes), len(p.nodes))
+		testing.expect_value(t, len(got.edges), len(p.edges))
+		testing.expect(t, is_patch(got))
+	}
 }
 
 @(private)

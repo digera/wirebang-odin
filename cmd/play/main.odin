@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import snd "../../sounds"
 import wb "../../wirebang"
 
 main :: proc() {
@@ -10,32 +11,24 @@ main :: proc() {
 		name = os.args[1]
 	}
 
-	entry: wb.Library_Entry
-	found := false
-	for e in wb.LIBRARY {
-		if e.id == name || e.label == name {
-			entry = e
-			found = true
-			break
-		}
-	}
-	if !found {
-		fmt.eprintf("unknown sound %q\n", name)
-		fmt.println("sounds: zap, thump, whoosh")
-		os.exit(1)
-	}
-
 	if !wb.init() {
 		os.exit(1)
 	}
 	defer wb.shutdown()
 
-	patch := entry.patch()
-	defer wb.destroy_patch(&patch)
-	if !wb.play(patch) {
-		fmt.eprintf("failed to play %s\n", entry.label)
+	switch name {
+	case "zap", "Zap":
+		snd.play_zap()
+	case "thump", "Thump":
+		snd.play_thump()
+	case "whoosh", "Whoosh":
+		snd.play_whoosh()
+	case:
+		fmt.eprintf("unknown sound %q\n", name)
+		fmt.println("sounds: zap, thump, whoosh")
 		os.exit(1)
 	}
-	fmt.printf("playing %s\n", entry.label)
+
+	fmt.printf("playing %s\n", name)
 	wb.wait_until_quiet()
 }

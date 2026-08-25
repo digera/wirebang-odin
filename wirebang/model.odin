@@ -484,29 +484,7 @@ destroy_patch :: proc(p: ^Patch) {
 }
 
 clone_patch :: proc(src: Patch, allocator := context.allocator) -> Patch {
-	p: Patch
-	p.name = strings.clone(src.name, allocator)
-	p.fn_name = strings.clone(src.fn_name, allocator)
-	p.nodes = make([dynamic]Graph_Node, len(src.nodes), allocator)
-	p.edges = make([dynamic]Graph_Edge, len(src.edges), allocator)
-	for n, i in src.nodes {
-		p.nodes[i] = Graph_Node {
-			id     = strings.clone(n.id, allocator),
-			kind   = n.kind,
-			x      = n.x,
-			y      = n.y,
-			name   = strings.clone(n.name, allocator),
-			params = n.params,
-		}
-	}
-	for e, i in src.edges {
-		p.edges[i] = Graph_Edge {
-			id   = strings.clone(e.id, allocator),
-			from = strings.clone(e.from, allocator),
-			to   = strings.clone(e.to, allocator),
-		}
-	}
-	return p
+	return patch_from_slices(src.name, src.fn_name, src.nodes[:], src.edges[:], allocator)
 }
 
 patch_from_slices :: proc(name, fn_name: string, nodes: []Graph_Node, edges: []Graph_Edge, allocator := context.allocator) -> Patch {
@@ -718,7 +696,7 @@ remove_node :: proc(patch: ^Patch, id: string) {
 	}
 }
 
-connect :: proc(patch: ^Patch, from, to: string, allocator := context.allocator) -> (Graph_Edge, bool) {
+connect_patch :: proc(patch: ^Patch, from, to: string, allocator := context.allocator) -> (Graph_Edge, bool) {
 	if from == to {
 		return {}, false
 	}

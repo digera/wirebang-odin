@@ -1,91 +1,122 @@
 package wirebang
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
-emit_live :: proc(patch: Patch, allocator := context.allocator) -> string {
+Emit_Options :: struct {
+	package_name: string,
+	import_path:  string,
+}
+
+generate_code :: proc(patch: Patch, opts := Emit_Options{}, allocator := context.allocator) -> string {
+	pkg := opts.package_name if opts.package_name != "" else "sfx"
+	imp := opts.import_path if opts.import_path != "" else "wirebang"
 	fn := sanitize_fn_name(patch.fn_name if patch.fn_name != "" else patch.name, context.temp_allocator)
-	upper, _ := strings.to_upper(fn, context.temp_allocator)
-	stem := strings.trim_prefix(fn, "play_")
+	plan := plan_patch(patch, context.temp_allocator)
+
+	used := make(map[string]bool, context.temp_allocator)
+	used["ctx"] = true
+	used["engine"] = true
+	used["out"] = true
+	names := make([]string, len(plan.nodes), context.temp_allocator)
+	for n, i in plan.nodes {
+		names[i] = var_name(n.node, &used, context.temp_allocator)
+	}
+
 	b := strings.builder_make(allocator)
-	fmt.sbprintf(&b, "package sfx\n\n")
-	fmt.sbprintf(&b, "import wb \"wirebang\"\n")
-	fmt.sbprintf(&b, "import ma \"vendor:miniaudio\"\n\n")
-	fmt.sbprintf(&b, "%s_NODES := [?]wb.Graph_Node {{\n", upper)
-	for n in patch.nodes {
-		fmt.sbprintf(&b, "\t{{id = %q, kind = .%v, x = %g, y = %g, name = %q", n.id, n.kind, n.x, n.y, n.name)
-		if n.kind != .Out {
-			fmt.sbprintf(&b, ", params = ")
-			write_params_odin(&b, n)
+	fmt.sbprintf(&b, "package %s\n\n", pkg)
+	fmt.sbprintf(&b, "import wb %q\n\n", imp)
+	fmt.sbprintf(&b, "%s :: proc(engine: ^wb.Engine = nil) {{\n", fn)
+	fmt.sbprintf(&b, "\twb.play(engine, proc(ctx: ^wb.Ctx) {{\n")
+
+	for n, i in plan.nodes {
+		name := names[i]
+		switch n.create.kind {
+		case .Osc:
+			fmt.sbprintf(&b, "\t\t%s := wb.osc(ctx, .%v)\n", name, n.create.osc)
+		case .Noise:
+			fmt.sbprintf(&b, "\t\t%s := wb.noise(ctx, %s)\n", name, fmt_f32(n.create.duration))
+		case .Filter:
+			fmt.sbprintf(&b, "\t\t%s := wb.filter(ctx, .%v, %s)\n", name, n.create.filter, fmt_f32(n.create.q))
+		case .Gain:
+			fmt.sbprintf(&b, "\t\t%s := wb.gain(ctx)\n", name)
+		case .Shaper:
+			fmt.sbprintf(&b, "\t\t%s := wb.shaper(ctx, %s)\n", name, fmt_f32(n.create.amount))
+		case .Panner:
+			fmt.sbprintf(&b, "\t\t%s := wb.panner(ctx, %s)\n", name, fmt_f32(n.create.pan))
 		}
-		fmt.sbprintf(&b, "}},\n")
+		for a in n.actions {
+			switch a.kind {
+			case .Set:
+				if a.param == .Frequency {
+					fmt.sbprintf(&b, "\t\twb.set_freq(%s, %s, %s)\n", name, emit_num_expr(a.value), fmt_f32(a.time))
+				} else {
+					fmt.sbprintf(&b, "\t\twb.set_gain(%s, %s, %s)\n", name, emit_num_expr(a.value), fmt_f32(a.time))
+				}
+			case .Ramp:
+				curve := a.curve == .Lin ? ".Lin" : ".Exp"
+				if a.param == .Frequency {
+					fmt.sbprintf(&b, "\t\twb.ramp_freq(%s, %s, %s, %s)\n", name, emit_num_expr(a.value), fmt_f32(a.time), curve)
+				} else {
+					fmt.sbprintf(&b, "\t\twb.ramp_gain(%s, %s, %s, %s)\n", name, emit_num_expr(a.value), fmt_f32(a.time), curve)
+				}
+			case .Start:
+				fmt.sbprintf(&b, "\t\twb.start(%s, %s)\n", name, fmt_f32(a.time))
+			case .Stop:
+				fmt.sbprintf(&b, "\t\twb.stop(%s, %s)\n", name, fmt_f32(a.time))
+			}
+		}
+		strings.write_string(&b, "\n")
 	}
-	fmt.sbprintf(&b, "}}\n\n")
-	fmt.sbprintf(&b, "%s_EDGES := [?]wb.Graph_Edge {{\n", upper)
-	for e in patch.edges {
-		fmt.sbprintf(&b, "\t{{id = %q, from = %q, to = %q}},\n", e.id, e.from, e.to)
+
+	for e in plan.edges {
+		if e.from < 0 || e.from >= len(names) {
+			continue
+		}
+		from := names[e.from]
+		if e.to < 0 {
+			fmt.sbprintf(&b, "\t\twb.connect(%s, ctx.out)\n", from)
+		} else if e.to < len(names) {
+			fmt.sbprintf(&b, "\t\twb.connect(%s, %s)\n", from, names[e.to])
+		}
 	}
-	fmt.sbprintf(&b, "}}\n\n")
-	fmt.sbprintf(&b, "make_%s :: proc(allocator := context.allocator) -> wb.Patch {{\n", stem)
-	fmt.sbprintf(&b, "\treturn wb.patch_from_slices(%q, %q, %s_NODES[:], %s_EDGES[:], allocator)\n", patch.name, fn, upper, upper)
-	fmt.sbprintf(&b, "}}\n\n")
-	fmt.sbprintf(&b, "%s :: proc(engine: ^ma.engine = nil) {{\n", fn)
-	fmt.sbprintf(&b, "\tp := make_%s()\n", stem)
-	fmt.sbprintf(&b, "\tdefer wb.destroy_patch(&p)\n")
-	fmt.sbprintf(&b, "\tif engine != nil {{\n")
-	fmt.sbprintf(&b, "\t\twb.play(engine, p)\n")
-	fmt.sbprintf(&b, "\t}} else {{\n")
-	fmt.sbprintf(&b, "\t\twb.play(p)\n")
-	fmt.sbprintf(&b, "\t}}\n")
+
+	fmt.sbprintf(&b, "\t}})\n")
 	fmt.sbprintf(&b, "}}\n")
-	return strings.clone(strings.to_string(b), allocator)
+	return strings.to_string(b)
 }
 
-emit_baked :: proc(patch: Patch, wav_file: string, allocator := context.allocator) -> string {
-	fn := sanitize_fn_name(patch.fn_name if patch.fn_name != "" else patch.name, context.temp_allocator)
-	stem := strings.trim_prefix(fn, "play_")
-	upper, _ := strings.to_upper(stem, context.temp_allocator)
-	json_text := string(encode_patch(patch, context.temp_allocator))
-	b := strings.builder_make(allocator)
-	fmt.sbprintf(&b, "package sfx\n\n")
-	fmt.sbprintf(&b, "import ma \"vendor:miniaudio\"\n\n")
-	fmt.sbprintf(&b, "// Baked one-shot. Play with miniaudio or raylib LoadWaveFromMemory.\n")
-	fmt.sbprintf(&b, "%s_WAV := #load(%q)\n\n", upper, wav_file)
-	fmt.sbprintf(&b, "// Graph so Wirebang can reopen this sound.\n")
-	fmt.sbprintf(&b, "%s_PATCH :: %q\n\n", upper, json_text)
-	fmt.sbprintf(&b, "play_%s :: proc(engine: ^ma.engine) {{\n", stem)
-	fmt.sbprintf(&b, "\t// Decode %s_WAV with ma.decoder_init_memory and ma.sound_init_from_data_source.\n", upper)
-	fmt.sbprintf(&b, "\t_ = engine\n")
-	fmt.sbprintf(&b, "}}\n")
-	return strings.clone(strings.to_string(b), allocator)
+@(private)
+fmt_f32 :: proc(v: f32) -> string {
+	r := math.round(f64(v) * 1_000_000) / 1_000_000
+	if r == 0 {
+		return "0"
+	}
+	return fmt.tprintf("%g", f32(r))
 }
 
-write_baked_files :: proc(patch: Patch, dir: string) -> (wav_path, odin_path: string, ok: bool) {
-	os.make_directory(dir)
-	wav_name := asset_file_name(patch, "wav", context.temp_allocator)
-	odin_name := asset_file_name(patch, "odin", context.temp_allocator)
-	wav_path, _ = filepath.join({dir, wav_name}, context.temp_allocator)
-	odin_path, _ = filepath.join({dir, odin_name}, context.temp_allocator)
-	wav := bake_wav(patch)
-	defer delete(wav)
-	if err := os.write_entire_file(wav_path, wav); err != nil {
-		return "", "", false
+@(private)
+emit_num_expr :: proc(expr: Num_Expr) -> string {
+	inner: string
+	if expr.jitter > 0 {
+		inner = fmt.tprintf("wb.jitter(%s, %s)", fmt_f32(expr.value), fmt_f32(expr.jitter))
+	} else {
+		inner = fmt_f32(expr.value)
 	}
-	src := emit_baked(patch, wav_name)
-	defer delete(src)
-	if err := os.write_entire_file(odin_path, transmute([]u8)src); err != nil {
-		return "", "", false
+	if expr.max_exp {
+		return fmt.tprintf("wb.safe_exp(%s)", inner)
 	}
-	return strings.clone(wav_path), strings.clone(odin_path), true
+	return inner
 }
 
 write_live_file :: proc(patch: Patch, dir: string) -> (path: string, ok: bool) {
 	os.make_directory(dir)
 	name := asset_file_name(patch, "odin", context.temp_allocator)
 	path, _ = filepath.join({dir, name}, context.temp_allocator)
-	src := emit_live(patch)
+	src := generate_code(patch)
 	defer delete(src)
 	if err := os.write_entire_file(path, transmute([]u8)src); err != nil {
 		return "", false
@@ -93,39 +124,14 @@ write_live_file :: proc(patch: Patch, dir: string) -> (path: string, ok: bool) {
 	return strings.clone(path), true
 }
 
-@(private)
-write_params_odin :: proc(b: ^strings.Builder, node: Graph_Node) {
-	switch p in node.params {
-	case Osc_Params:
-		fmt.sbprintf(
-			b,
-			"wb.Osc_Params{{type = .%v, freq = %g, freq_end = %g, ramp = .%v, duration = %g, delay = %g, jitter = %g}}",
-			p.type,
-			p.freq,
-			p.freq_end,
-			p.ramp,
-			p.duration,
-			p.delay,
-			p.jitter,
-		)
-	case Noise_Params:
-		fmt.sbprintf(b, "wb.Noise_Params{{duration = %g, delay = %g}}", p.duration, p.delay)
-	case Filter_Params:
-		fmt.sbprintf(
-			b,
-			"wb.Filter_Params{{type = .%v, freq = %g, freq_end = %g, q = %g, ramp_time = %g, jitter = %g}}",
-			p.type,
-			p.freq,
-			p.freq_end,
-			p.q,
-			p.ramp_time,
-			p.jitter,
-		)
-	case Gain_Params:
-		fmt.sbprintf(b, "wb.Gain_Params{{peak = %g, duration = %g, delay = %g, jitter = %g}}", p.peak, p.duration, p.delay, p.jitter)
-	case Shaper_Params:
-		fmt.sbprintf(b, "wb.Shaper_Params{{amount = %g}}", p.amount)
-	case Panner_Params:
-		fmt.sbprintf(b, "wb.Panner_Params{{pan = %g}}", p.pan)
+write_baked_wav :: proc(patch: Patch, dir: string) -> (path: string, ok: bool) {
+	os.make_directory(dir)
+	wav_name := asset_file_name(patch, "wav", context.temp_allocator)
+	path, _ = filepath.join({dir, wav_name}, context.temp_allocator)
+	wav := bake_wav(patch)
+	defer delete(wav)
+	if err := os.write_entire_file(path, wav); err != nil {
+		return "", false
 	}
+	return strings.clone(path), true
 }
