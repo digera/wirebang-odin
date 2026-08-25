@@ -595,7 +595,7 @@ draw_inspector :: proc(app: ^App, r: rl.Rectangle) {
 draw_code :: proc(app: ^App, r: rl.Rectangle) {
 	rl.DrawLine(i32(r.x), i32(r.y), i32(r.x + r.width), i32(r.y), LINE)
 	rl.DrawText("PLAY PROC", i32(r.x + 14), i32(r.y + 10), 12, MUTED)
-	rl.DrawText("Dialect Odin. Live writes the play proc. Bake is a WAV fallback.", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
+	rl.DrawText("miniaudio Odin. Live writes play_*. Bake is a WAV fallback.", i32(r.x + 14), i32(r.y + 28), 12, MUTED)
 	src := app.code
 	if len(src) > 1800 {
 		src = src[:1800]

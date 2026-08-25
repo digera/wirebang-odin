@@ -2,7 +2,7 @@
 
 A node graph for one-shot SFX, written in Odin. The graph is the editor. The Odin it emits is the sound.
 
-Preview, Live export, and in-game playback run the same dialect: a `play_*` procedure that builds oscillators, filters, and cables. There is no `Patch` table in the exported file. WAV is a fallback if you do not want the DSP in the game.
+Preview in the editor runs the graph through Wirebang's interpreter. Live export writes a `play_*` procedure that talks to [miniaudio](https://miniaud.io/) — the same vendor package an Odin game already has. The game does not import Wirebang. WAV is a fallback if you would rather ship a sample.
 
 ## License
 
@@ -46,28 +46,29 @@ bin/play whoosh
 
 ## Use in a game
 
-Drop the exported Odin next to `wirebang` and call `play_*`:
+Copy the exported file into your tree. It depends on `vendor:miniaudio` and the Odin core library — not Wirebang.
 
 ```odin
-import wb "wirebang"
-import sfx "export" // or copy play_zap into your tree
+import ma "vendor:miniaudio"
+import sfx "export" // or paste play_zap into your package
 
-wb.init()
-play_zap()
-wb.wait_until_quiet()
-wb.shutdown()
+eng: ma.engine
+ma.engine_init(nil, &eng)
+defer ma.engine_uninit(&eng)
+
+sfx.play_zap(&eng)
 ```
 
-`play_zap(&engine)` if you already have a `ma.engine`. A raylib game can keep `InitAudioDevice` for music and still open a Wirebang engine for live one-shots. Shared-mode devices usually allow both. One engine for all audio is cleaner when you can do it.
+If you already have a `ma.engine`, pass that. Keep the engine alive until the one-shot finishes; `play_*` copies PCM into a miniaudio sound and returns.
 
-Handwritten files in the same dialect (`wb.osc`, `wb.connect`, …) reopen as graphs. Arbitrary Odin that wanders off-dialect will not.
+Handwritten files in the same dialect (`ma.waveform_config_init`, `ma.noise_config_init`, `biquad_sweep`, `gain_env`, …) reopen as graphs. Arbitrary Odin that wanders off-dialect will not.
 
 `sounds/` is the example library (Zap, Thump, Whoosh). Treat those files the same way as anything you export: use them, change them, or ignore them.
 
-WAV is optional. If you do not want to link the DSP, Bake and play the file with whatever you already use (`ma_decoder`, raylib `LoadSound`).
+WAV is optional. If you do not want to run the DSP, Bake and play the file with whatever you already use (`ma_decoder`, raylib `LoadSound`).
 
 ## Scope
 
-In: short procedural SFX, live preview, Odin play-proc export, optional WAV bake.
+In: short procedural SFX, live preview, miniaudio play-proc export, optional WAV bake.
 
 Out: a DAW, sample playback engine, or a shipped mixer.

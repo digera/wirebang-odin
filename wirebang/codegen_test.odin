@@ -26,8 +26,12 @@ test_generate_code_is_play_proc :: proc(t: ^testing.T) {
 	src := generate_code(p)
 	defer delete(src)
 	testing.expect(t, strings_contains(src, "play_whoosh"))
-	testing.expect(t, strings_contains(src, "wb.play"))
-	testing.expect(t, strings_contains(src, "wb.noise"))
+	testing.expect(t, strings_contains(src, "vendor:miniaudio"))
+	testing.expect(t, strings_contains(src, "ma.noise_config_init"))
+	testing.expect(t, strings_contains(src, "ma.biquad"))
+	testing.expect(t, !strings_contains(src, "import wb"))
+	testing.expect(t, !strings_contains(src, "wb.play"))
+	testing.expect(t, !strings_contains(src, "wb.noise"))
 	testing.expect(t, !strings_contains(src, "Graph_Node"))
 	testing.expect(t, !strings_contains(src, "ZAP_NODES"))
 	testing.expect(t, !strings_contains(src, "patch_from_slices"))
@@ -53,7 +57,7 @@ test_parse_roundtrip_library :: proc(t: ^testing.T) {
 	for entry in LIBRARY {
 		p := entry.patch()
 		defer destroy_patch(&p)
-		src := generate_code(p, {package_name = "sounds", import_path = "../wirebang"})
+		src := generate_code(p, {package_name = "sounds"})
 		defer delete(src)
 		got, ok := parse_code(src)
 		defer destroy_patch(&got)
@@ -64,6 +68,16 @@ test_parse_roundtrip_library :: proc(t: ^testing.T) {
 		testing.expect_value(t, len(got.nodes), len(p.nodes))
 		testing.expect_value(t, len(got.edges), len(p.edges))
 		testing.expect(t, is_patch(got))
+		if entry.id == "whoosh" {
+			pan_ok := false
+			for n in got.nodes {
+				if n.kind == .Panner {
+					pp := n.params.(Panner_Params)
+					pan_ok = abs(pp.pan - (-0.35)) < 0.001
+				}
+			}
+			testing.expect(t, pan_ok, "whoosh panner pan")
+		}
 	}
 }
 

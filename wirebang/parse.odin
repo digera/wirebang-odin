@@ -5,7 +5,8 @@ import "core:strings"
 import "core:unicode"
 
 parse_code :: proc(src: string, allocator := context.allocator) -> (Patch, bool) {
-	body, body_ok := extract_build_body(src)
+	fn := extract_fn_name(src)
+	body, body_ok := extract_play_body(src, fn)
 	if !body_ok {
 		return {}, false
 	}
@@ -13,7 +14,6 @@ parse_code :: proc(src: string, allocator := context.allocator) -> (Patch, bool)
 	p := empty_patch(allocator)
 	delete(p.name)
 	delete(p.fn_name)
-	fn := extract_fn_name(src)
 	p.fn_name = strings.clone(fn, allocator)
 	stem := strings.trim_prefix(fn, "play_")
 	if stem == "" || stem == fn {
@@ -24,6 +24,8 @@ parse_code :: proc(src: string, allocator := context.allocator) -> (Patch, bool)
 	taken := taken_ids(p, context.temp_allocator)
 	name_to_id := make(map[string]string, context.temp_allocator)
 	name_to_id["out"] = "out"
+	buf_to_id := make(map[string]string, context.temp_allocator)
+	mix_ids := make(map[string][dynamic]string, context.temp_allocator)
 	drafts := make(map[string]Draft, context.temp_allocator)
 
 	lines := strings.split_lines(body, context.temp_allocator)
@@ -32,32 +34,24 @@ parse_code :: proc(src: string, allocator := context.allocator) -> (Patch, bool)
 		if line == "" {
 			continue
 		}
-		if lhs, callee, args, ok := parse_assign(line); ok {
-			kind, kok := callee_kind(callee)
-			if !kok {
-				destroy_patch(&p)
-				return {}, false
-			}
-			id := uid(kind_key(kind), taken, allocator)
-			taken[id] = true
-			node := Graph_Node {
-				id     = id,
-				kind   = kind,
-				name   = strings.clone(lhs, allocator),
-				params = defaults_for(kind),
-			}
-			d := draft_from_create(kind, args)
-			d.id = id
-			d.name = lhs
-			d.kind = kind
-			apply_create_params(&node, d)
-			append(&p.nodes, node)
-			name_to_id[strings.clone(lhs, context.temp_allocator)] = id
-			drafts[lhs] = d
+		if skip_line(line) {
 			continue
 		}
+		if name, type, ok := parse_typed_decl(line); ok {
+			kind, kok := ma_type_kind(type)
+			if !kok {
+				continue
+			}
+			ensure_node(&p, &taken, &name_to_id, &drafts, &buf_to_id, kind, name, allocator)
+			continue
+		}
+		if lhs, rhs, ok := split_assign(line); ok {
+			if apply_assign(&p, &taken, &name_to_id, &drafts, &buf_to_id, &mix_ids, lhs, rhs, allocator) {
+				continue
+			}
+		}
 		if callee, args, ok := parse_call(line); ok {
-			if !apply_call(&p, &drafts, name_to_id, callee, args, allocator) {
+			if !apply_call(&p, &taken, &name_to_id, &drafts, &buf_to_id, &mix_ids, callee, args, allocator) {
 				destroy_patch(&p)
 				return {}, false
 			}
@@ -119,19 +113,25 @@ title_stem :: proc(stem: string, allocator := context.allocator) -> string {
 
 @(private)
 extract_fn_name :: proc(src: string) -> string {
-	i := strings.index(src, ":: proc")
-	if i <= 0 {
-		return "play_sound"
+	idx := 0
+	for idx < len(src) {
+		i := strings.index(src[idx:], "play_")
+		if i < 0 {
+			break
+		}
+		i += idx
+		j := i
+		for j < len(src) && is_ident_byte(src[j]) {
+			j += 1
+		}
+		name := src[i:j]
+		rest := strings.trim_left_space(src[j:])
+		if strings.has_prefix(rest, "::") {
+			return name
+		}
+		idx = j
 	}
-	j := i - 1
-	for j >= 0 && is_ident_byte(src[j]) {
-		j -= 1
-	}
-	name := strings.trim_space(src[j + 1:i])
-	if name == "" {
-		return "play_sound"
-	}
-	return name
+	return "play_sound"
 }
 
 @(private)
@@ -140,12 +140,9 @@ is_ident_byte :: proc(b: u8) -> bool {
 }
 
 @(private)
-extract_build_body :: proc(src: string) -> (string, bool) {
-	marker := "proc(ctx:"
-	i := strings.index(src, marker)
-	if i < 0 {
-		i = strings.index(src, "proc(ctx :")
-	}
+extract_play_body :: proc(src: string, fn: string) -> (string, bool) {
+	needle := strings.concatenate({fn, " :: proc"}, context.temp_allocator)
+	i := strings.index(src, needle)
 	if i < 0 {
 		return "", false
 	}
@@ -184,6 +181,20 @@ strip_comment :: proc(line: string) -> string {
 }
 
 @(private)
+skip_line :: proc(line: string) -> bool {
+	if strings.has_prefix(line, "if ") || strings.has_prefix(line, "defer ") {
+		return true
+	}
+	if line == "return" || strings.has_prefix(line, "return ") {
+		return true
+	}
+	if strings.has_prefix(line, "submit_pcm(") {
+		return true
+	}
+	return false
+}
+
+@(private)
 split_args :: proc(s: string, allocator := context.temp_allocator) -> []string {
 	out := make([dynamic]string, allocator)
 	start := 0
@@ -191,9 +202,9 @@ split_args :: proc(s: string, allocator := context.temp_allocator) -> []string {
 	for i in 0 ..< len(s) {
 		c := s[i]
 		switch c {
-		case '(':
+		case '(', '{', '[':
 			depth += 1
-		case ')':
+		case ')', '}', ']':
 			depth -= 1
 		case ',':
 			if depth == 0 {
@@ -210,20 +221,45 @@ split_args :: proc(s: string, allocator := context.temp_allocator) -> []string {
 }
 
 @(private)
-parse_assign :: proc(line: string) -> (lhs, callee: string, args: []string, ok: bool) {
+parse_typed_decl :: proc(line: string) -> (name, type: string, ok: bool) {
+	if strings.contains(line, ":=") {
+		return
+	}
+	colon := strings.index_byte(line, ':')
+	if colon <= 0 {
+		return
+	}
+	name = strings.trim_space(line[:colon])
+	type = strings.trim_space(line[colon + 1:])
+	if name == "" || !strings.has_prefix(type, "ma.") {
+		return
+	}
+	ok = true
+	return
+}
+
+@(private)
+ma_type_kind :: proc(type: string) -> (Node_Kind, bool) {
+	switch strings.trim_space(type) {
+	case "ma.waveform":
+		return .Osc, true
+	case "ma.noise":
+		return .Noise, true
+	case "ma.biquad":
+		return .Filter, true
+	}
+	return .Osc, false
+}
+
+@(private)
+split_assign :: proc(line: string) -> (lhs, rhs: string, ok: bool) {
 	eq := strings.index(line, ":=")
 	if eq < 0 {
 		return
 	}
 	lhs = strings.trim_space(line[:eq])
-	rhs := strings.trim_space(line[eq + 2:])
-	paren := strings.index_byte(rhs, '(')
-	if paren < 0 || !strings.has_suffix(rhs, ")") {
-		return
-	}
-	callee = strings.trim_space(rhs[:paren])
-	args = split_args(rhs[paren + 1:len(rhs) - 1])
-	ok = lhs != "" && callee != ""
+	rhs = strings.trim_space(line[eq + 2:])
+	ok = lhs != "" && rhs != ""
 	return
 }
 
@@ -243,281 +279,470 @@ parse_call :: proc(line: string) -> (callee: string, args: []string, ok: bool) {
 }
 
 @(private)
-callee_kind :: proc(callee: string) -> (Node_Kind, bool) {
-	switch callee {
-	case "wb.osc":
-		return .Osc, true
-	case "wb.noise":
-		return .Noise, true
-	case "wb.filter":
-		return .Filter, true
-	case "wb.gain":
-		return .Gain, true
-	case "wb.shaper":
-		return .Shaper, true
-	case "wb.panner":
-		return .Panner, true
+parse_call_expr :: proc(expr: string) -> (callee: string, args: []string, ok: bool) {
+	expr := strings.trim_space(expr)
+	paren := strings.index_byte(expr, '(')
+	if paren < 0 || !strings.has_suffix(expr, ")") {
+		return
 	}
-	return .Osc, false
+	callee = strings.trim_space(expr[:paren])
+	args = split_args(expr[paren + 1:len(expr) - 1])
+	ok = callee != ""
+	return
+}
+
+@(private)
+strip_ref :: proc(s: string) -> string {
+	s := strings.trim_space(s)
+	return strings.trim_prefix(s, "&")
+}
+
+@(private)
+stem_suffix :: proc(s, suffix: string) -> (string, bool) {
+	if strings.has_suffix(s, suffix) && len(s) > len(suffix) {
+		return s[:len(s) - len(suffix)], true
+	}
+	return "", false
+}
+
+@(private)
+buf_stem :: proc(s: string) -> string {
+	s := strip_ref(s)
+	if stem, ok := stem_suffix(s, "_buf"); ok {
+		return stem
+	}
+	if stem, ok := stem_suffix(s, "_in"); ok {
+		return stem
+	}
+	return s
+}
+
+@(private)
+parse_enum_token :: proc(s: string) -> string {
+	s := strings.trim_space(s)
+	s = strings.trim_prefix(s, ".")
+	return s
+}
+
+@(private)
+parse_osc_type :: proc(s: string) -> Osc_Type {
+	switch parse_enum_token(s) {
+	case "sine", "Sine":
+		return .Sine
+	case "square", "Square":
+		return .Square
+	case "sawtooth", "Sawtooth":
+		return .Sawtooth
+	case "triangle", "Triangle":
+		return .Triangle
+	}
+	return .Sine
+}
+
+@(private)
+parse_filter_type :: proc(s: string) -> Filter_Type {
+	switch parse_enum_token(s) {
+	case "lowpass", "Lowpass":
+		return .Lowpass
+	case "highpass", "Highpass":
+		return .Highpass
+	case "bandpass", "Bandpass":
+		return .Bandpass
+	case "notch", "Notch":
+		return .Notch
+	}
+	return .Bandpass
 }
 
 @(private)
 parse_num :: proc(s: string) -> (Num_Expr, bool) {
 	s := strings.trim_space(s)
-	if strings.has_prefix(s, "wb.safe_exp(") && strings.has_suffix(s, ")") {
-		inner, ok := parse_num(s[len("wb.safe_exp("):len(s) - 1])
-		inner.max_exp = true
-		return inner, ok
+	if strings.has_prefix(s, "max(f32(0.001),") && strings.has_suffix(s, ")") {
+		inner := strings.trim_space(s[len("max(f32(0.001),"):len(s) - 1])
+		n, ok := parse_num(inner)
+		n.max_exp = true
+		return n, ok
 	}
-	if strings.has_prefix(s, "wb.jitter(") && strings.has_suffix(s, ")") {
-		args := split_args(s[len("wb.jitter("):len(s) - 1])
-		if len(args) != 2 {
-			return {}, false
+	if strings.has_prefix(s, "max(0.001,") && strings.has_suffix(s, ")") {
+		inner := strings.trim_space(s[len("max(0.001,"):len(s) - 1])
+		n, ok := parse_num(inner)
+		n.max_exp = true
+		return n, ok
+	}
+	if star := strings.index(s, " * ("); star > 0 && strings.has_suffix(s, ")") && strings.contains(s, "rand.float32()") {
+		lit_s := strings.trim_space(s[:star])
+		inner := s[star + 4:len(s) - 1]
+		mark := " + rand.float32() * "
+		at := strings.index(inner, mark)
+		if at >= 0 {
+			a_s := strings.trim_space(inner[:at])
+			b_s := strings.trim_space(inner[at + len(mark):])
+		v, vok := parse_num(lit_s)
+		b, bok := parse_num(b_s)
+		_ = a_s
+		if vok && bok {
+			return Num_Expr{value = v.value, jitter = b.value * 0.5}, true
 		}
-		a, aok := strconv.parse_f32(strings.trim_space(args[0]))
-		b, bok := strconv.parse_f32(strings.trim_space(args[1]))
-		return Num_Expr{value = a, jitter = b}, aok && bok
+		}
+	}
+	if strings.has_prefix(s, "f32(") && strings.has_suffix(s, ")") {
+		return parse_num(s[len("f32("):len(s) - 1])
+	}
+	if strings.has_prefix(s, "f64(") && strings.has_suffix(s, ")") {
+		return parse_num(s[len("f64("):len(s) - 1])
 	}
 	v, ok := strconv.parse_f32(s)
 	return Num_Expr{value = v}, ok
 }
 
 @(private)
-parse_enum_token :: proc(s: string) -> string {
-	s := strings.trim_space(s)
-	return strings.trim_prefix(s, ".")
+draft_ptr :: proc(drafts: ^map[string]Draft, name: string) -> ^Draft {
+	if name in drafts^ {
+		return &drafts[name]
+	}
+	return nil
 }
 
 @(private)
-draft_from_create :: proc(kind: Node_Kind, args: []string) -> Draft {
-	d: Draft
-	d.kind = kind
-	d.ramp = .Exp
+ensure_node :: proc(
+	p: ^Patch,
+	taken: ^map[string]bool,
+	name_to_id: ^map[string]string,
+	drafts: ^map[string]Draft,
+	buf_to_id: ^map[string]string,
+	kind: Node_Kind,
+	name: string,
+	allocator := context.allocator,
+) -> ^Draft {
+	if name in name_to_id^ && name_to_id[name] != "out" {
+		if name in drafts^ {
+			return &drafts[name]
+		}
+	}
+	id := uid(kind_key(kind), taken^, allocator)
+	taken[id] = true
+	node := Graph_Node {
+		id     = id,
+		kind   = kind,
+		name   = strings.clone(name, allocator),
+		params = defaults_for(kind),
+	}
+	append(&p.nodes, node)
+	name_key := strings.clone(name, context.temp_allocator)
+	name_to_id[name_key] = id
+	buf_to_id[strings.concatenate({name, "_buf"}, context.temp_allocator)] = id
+	d := Draft {
+		id   = id,
+		name = name,
+		kind = kind,
+		ramp = .Exp,
+	}
 	switch kind {
-	case .Osc:
-		if len(args) >= 2 {
-			switch parse_enum_token(args[1]) {
-			case "Sine":
-				d.osc = .Sine
-			case "Square":
-				d.osc = .Square
-			case "Sawtooth":
-				d.osc = .Sawtooth
-			case "Triangle":
-				d.osc = .Triangle
-			}
-		}
-	case .Noise:
-		if len(args) >= 2 {
-			if n, ok := parse_num(args[1]); ok {
-				d.duration = n.value
-			}
-		}
 	case .Filter:
-		if len(args) >= 2 {
-			switch parse_enum_token(args[1]) {
-			case "Lowpass":
-				d.filter = .Lowpass
-			case "Highpass":
-				d.filter = .Highpass
-			case "Bandpass":
-				d.filter = .Bandpass
-			case "Notch":
-				d.filter = .Notch
-			}
-		}
-		if len(args) >= 3 {
-			if n, ok := parse_num(args[2]); ok {
-				d.q = n.value
-			}
-		}
-	case .Shaper:
-		if len(args) >= 2 {
-			if n, ok := parse_num(args[1]); ok {
-				d.amount = n.value
-			}
-		}
-	case .Panner:
-		if len(args) >= 2 {
-			if n, ok := parse_num(args[1]); ok {
-				d.pan = n.value
-			}
-		}
-	case .Gain, .Out:
+		d.q = 1
+	case .Osc, .Noise, .Gain, .Shaper, .Panner, .Out:
 	}
-	return d
+	drafts[name_key] = d
+	return &drafts[name]
 }
 
 @(private)
-apply_create_params :: proc(node: ^Graph_Node, d: Draft) {
-	switch node.kind {
-	case .Osc:
-		node.params = Osc_Params{type = d.osc}
-	case .Noise:
-		node.params = Noise_Params{duration = d.duration}
-	case .Filter:
-		node.params = Filter_Params{type = d.filter, q = d.q}
-	case .Gain:
-		node.params = Gain_Params{}
-	case .Shaper:
-		node.params = Shaper_Params{amount = d.amount}
-	case .Panner:
-		node.params = Panner_Params{pan = d.pan}
-	case .Out:
+resolve_sources :: proc(
+	arg: string,
+	name_to_id: map[string]string,
+	buf_to_id: map[string]string,
+	mix_ids: map[string][dynamic]string,
+	allocator := context.temp_allocator,
+) -> []string {
+	arg := strip_ref(arg)
+	if ids, ok := mix_ids[arg]; ok {
+		return ids[:]
 	}
+	if id, ok := buf_to_id[arg]; ok {
+		out := make([]string, 1, allocator)
+		out[0] = id
+		return out
+	}
+	stem := buf_stem(arg)
+	if id, ok := name_to_id[stem]; ok && id != "out" {
+		out := make([]string, 1, allocator)
+		out[0] = id
+		return out
+	}
+	return {}
+}
+
+@(private)
+add_edges :: proc(
+	p: ^Patch,
+	from_ids: []string,
+	to_id: string,
+	taken: ^map[string]bool,
+	allocator := context.allocator,
+) {
+	for from_id in from_ids {
+		if from_id == "" || to_id == "" || from_id == to_id {
+			continue
+		}
+		dup := false
+		for e in p.edges {
+			if e.from == from_id && e.to == to_id {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		edge := Graph_Edge {
+			id   = uid("e", taken^, allocator),
+			from = strings.clone(from_id, allocator),
+			to   = strings.clone(to_id, allocator),
+		}
+		taken[edge.id] = true
+		append(&p.edges, edge)
+	}
+}
+
+@(private)
+apply_num_to_name :: proc(drafts: ^map[string]Draft, lhs: string, n: Num_Expr) -> bool {
+	if stem, ok := stem_suffix(lhs, "_f0"); ok {
+		if d := draft_ptr(drafts, stem); d != nil {
+			d.freq = n.value
+			if n.jitter != 0 {
+				d.jitter = n.jitter
+			}
+			return true
+		}
+	}
+	if stem, ok := stem_suffix(lhs, "_f1"); ok {
+		if d := draft_ptr(drafts, stem); d != nil {
+			d.freq_end = n.value
+			d.has_ramp = true
+			if n.jitter != 0 {
+				d.jitter = n.jitter
+			}
+			return true
+		}
+	}
+	if stem, ok := stem_suffix(lhs, "_peak"); ok {
+		if d := draft_ptr(drafts, stem); d != nil {
+			d.peak = n.value
+			if n.jitter != 0 {
+				d.jitter = n.jitter
+			}
+			return true
+		}
+	}
+	return false
+}
+
+@(private)
+apply_assign :: proc(
+	p: ^Patch,
+	taken: ^map[string]bool,
+	name_to_id: ^map[string]string,
+	drafts: ^map[string]Draft,
+	buf_to_id: ^map[string]string,
+	mix_ids: ^map[string][dynamic]string,
+	lhs, rhs: string,
+	allocator := context.allocator,
+) -> bool {
+	if n, ok := parse_num(rhs); ok {
+		if stem, sok := stem_suffix(lhs, "_peak"); sok {
+			d := ensure_node(p, taken, name_to_id, drafts, buf_to_id, .Gain, stem, allocator)
+			d.peak = n.value
+			if n.jitter != 0 {
+				d.jitter = n.jitter
+			}
+			return true
+		}
+		apply_num_to_name(drafts, lhs, n)
+		return true
+	}
+	callee, args, cok := parse_call_expr(rhs)
+	if !cok {
+		return true
+	}
+	switch callee {
+	case "ma.waveform_config_init":
+		if stem, ok := stem_suffix(lhs, "_cfg"); ok {
+			if d := draft_ptr(drafts, stem); d != nil && len(args) >= 4 {
+				d.osc = parse_osc_type(args[3])
+			}
+		}
+	case "ma.noise_config_init":
+	case "mix_mono":
+		ids := make([dynamic]string, context.temp_allocator)
+		for a in args {
+			for id in resolve_sources(a, name_to_id^, buf_to_id^, mix_ids^) {
+				append(&ids, id)
+			}
+		}
+		mix_ids[strings.clone(lhs, context.temp_allocator)] = ids
+	case "downmix":
+		if len(args) >= 1 {
+			ids := make([dynamic]string, context.temp_allocator)
+			for id in resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^) {
+				append(&ids, id)
+			}
+			mix_ids[strings.clone(lhs, context.temp_allocator)] = ids
+		}
+	case "make":
+	case:
+		_ = p
+		_ = taken
+		_ = allocator
+	}
+	return true
 }
 
 @(private)
 apply_call :: proc(
 	p: ^Patch,
+	taken: ^map[string]bool,
+	name_to_id: ^map[string]string,
 	drafts: ^map[string]Draft,
-	name_to_id: map[string]string,
+	buf_to_id: ^map[string]string,
+	mix_ids: ^map[string][dynamic]string,
 	callee: string,
 	args: []string,
 	allocator := context.allocator,
 ) -> bool {
-	if len(args) == 0 {
-		return true
-	}
-	name := strings.trim_space(args[0])
 	switch callee {
-	case "wb.start":
-		if len(args) < 2 {
+	case "read_waveform_ramp":
+		if len(args) < 7 {
 			return false
 		}
-		d, ok := &drafts[name]
-		if !ok {
+		name := strip_ref(args[0])
+		d := draft_ptr(drafts, name)
+		if d == nil {
 			return false
 		}
-		n, nok := parse_num(args[1])
-		if !nok {
-			return false
+		if t, ok := parse_num(args[5]); ok {
+			d.start = t.value
+			d.has_start = true
+			d.delay = t.value
 		}
-		d.start = n.value
-		d.has_start = true
-		d.delay = n.value
-	case "wb.stop":
-		if len(args) < 2 {
-			return false
+		if t, ok := parse_num(args[6]); ok {
+			d.stop = t.value
+			d.has_stop = true
 		}
-		d, ok := &drafts[name]
-		if !ok {
-			return false
-		}
-		n, nok := parse_num(args[1])
-		if !nok {
-			return false
-		}
-		d.stop = n.value
-		d.has_stop = true
-	case "wb.set_freq":
-		if len(args) < 3 {
-			return false
-		}
-		d, ok := &drafts[name]
-		if !ok {
-			return false
-		}
-		n, nok := parse_num(args[1])
-		if !nok {
-			return false
-		}
-		d.freq = n.value
-		if n.jitter != 0 {
-			d.jitter = n.jitter
-		}
-	case "wb.ramp_freq":
-		if len(args) < 3 {
-			return false
-		}
-		d, ok := &drafts[name]
-		if !ok {
-			return false
-		}
-		n, nok := parse_num(args[1])
-		if !nok {
-			return false
-		}
-		d.freq_end = n.value
-		d.has_ramp = true
-		t, tok := parse_num(args[2])
-		if !tok {
-			return false
-		}
-		if d.kind == .Filter {
-			d.ramp_time = t.value
-		}
-		if n.jitter != 0 {
-			d.jitter = n.jitter
-		}
-		if len(args) >= 4 && parse_enum_token(args[3]) == "Lin" {
+		if len(args) >= 8 && parse_enum_token(args[7]) == "lin" {
 			d.ramp = .Lin
 		} else {
 			d.ramp = .Exp
 		}
-	case "wb.set_gain":
-		if len(args) < 3 {
+		if args[3] != args[4] {
+			d.has_ramp = true
+		}
+	case "read_noise_window":
+		if len(args) < 5 {
 			return false
 		}
-		d, ok := &drafts[name]
-		if !ok {
+		name := strip_ref(args[0])
+		d := draft_ptr(drafts, name)
+		if d == nil {
 			return false
 		}
-		n, nok := parse_num(args[1])
-		if !nok {
-			return false
-		}
-		d.peak = n.value
-		if n.jitter != 0 {
-			d.jitter = n.jitter
-		}
-		t, tok := parse_num(args[2])
-		if tok {
+		if t, ok := parse_num(args[3]); ok {
+			d.start = t.value
+			d.has_start = true
 			d.delay = t.value
 		}
-	case "wb.ramp_gain":
+		if t, ok := parse_num(args[4]); ok {
+			d.stop = t.value
+			d.has_stop = true
+		}
+	case "biquad_init_rbj":
+		if len(args) < 5 {
+			return false
+		}
+		name := strip_ref(args[0])
+		d := draft_ptr(drafts, name)
+		if d == nil {
+			return false
+		}
+		d.filter = parse_filter_type(args[2])
+		if q, ok := parse_num(args[4]); ok {
+			d.q = q.value
+		}
+	case "biquad_sweep":
+		if len(args) < 9 {
+			return false
+		}
+		name := strip_ref(args[0])
+		d := draft_ptr(drafts, name)
+		if d == nil {
+			return false
+		}
+		d.filter = parse_filter_type(args[4])
+		if q, ok := parse_num(args[5]); ok {
+			d.q = q.value
+		}
+		if args[6] != args[7] {
+			d.has_ramp = true
+		}
+		if t, ok := parse_num(args[8]); ok {
+			d.ramp_time = t.value
+			if t.value > 0 {
+				d.has_ramp = true
+			}
+		}
+		from := resolve_sources(args[1], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, d.id, taken, allocator)
+	case "gain_env":
+		if len(args) < 6 {
+			return false
+		}
+		name := buf_stem(args[1])
+		d := ensure_node(p, taken, name_to_id, drafts, buf_to_id, .Gain, name, allocator)
+		if n, ok := parse_num(args[3]); ok {
+			d.peak = n.value
+			if n.jitter != 0 {
+				d.jitter = n.jitter
+			}
+		}
+		if t, ok := parse_num(args[4]); ok {
+			d.start = t.value
+			d.has_start = true
+			d.delay = t.value
+		}
+		if t, ok := parse_num(args[5]); ok {
+			d.stop = t.value
+			d.has_stop = true
+		}
+		from := resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, d.id, taken, allocator)
+	case "waveshape":
 		if len(args) < 3 {
 			return false
 		}
-		d, ok := &drafts[name]
-		if !ok {
+		name := buf_stem(args[1])
+		d := ensure_node(p, taken, name_to_id, drafts, buf_to_id, .Shaper, name, allocator)
+		if n, ok := parse_num(args[2]); ok {
+			d.amount = n.value
+		}
+		from := resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, d.id, taken, allocator)
+	case "pan_to_stereo":
+		if len(args) < 3 {
 			return false
 		}
-		t, tok := parse_num(args[2])
-		if !tok {
-			return false
+		name := buf_stem(args[1])
+		d := ensure_node(p, taken, name_to_id, drafts, buf_to_id, .Panner, name, allocator)
+		if n, ok := parse_num(args[2]); ok {
+			d.pan = n.value
 		}
-		d.stop = t.value
-		d.has_stop = true
-	case "wb.connect":
+		from := resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, d.id, taken, allocator)
+	case "add_stereo", "add_mono_to_stereo":
 		if len(args) < 2 {
 			return false
 		}
-		from_name := name
-		to_raw := strings.trim_space(args[1])
-		from_id, fok := name_to_id[from_name]
-		if !fok {
-			return false
-		}
-		to_id: string
-		if to_raw == "ctx.out" {
-			to_id = "out"
-		} else {
-			ok := false
-			to_id, ok = name_to_id[to_raw]
-			if !ok {
-				return false
-			}
-		}
-		taken := taken_ids(p^, context.temp_allocator)
-		edge := Graph_Edge {
-			id   = uid("e", taken, allocator),
-			from = strings.clone(from_id, allocator),
-			to   = strings.clone(to_id, allocator),
-		}
-		append(&p.edges, edge)
+		from := resolve_sources(args[1], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, "out", taken, allocator)
 	case:
-		return true
 	}
 	return true
 }
