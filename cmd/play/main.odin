@@ -26,9 +26,15 @@ main :: proc() {
 		snd.play_thump(&eng)
 	case "whoosh", "Whoosh":
 		snd.play_whoosh(&eng)
+	case "click", "Click":
+		snd.play_click(&eng)
+	case "hit", "Hit":
+		snd.play_hit(&eng)
+	case "pickup", "Pickup":
+		snd.play_pickup(&eng)
 	case:
 		fmt.eprintf("unknown sound %q\n", name)
-		fmt.println("sounds: zap, thump, whoosh")
+		fmt.println("sounds: zap, thump, whoosh, click, hit, pickup")
 		os.exit(1)
 	}
 

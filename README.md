@@ -42,6 +42,9 @@ The current graph is saved to `wirebang-patch.json` (editor only). Drop an expor
 bin/play zap
 bin/play thump
 bin/play whoosh
+bin/play click
+bin/play hit
+bin/play pickup
 ```
 
 ## Use in a game
@@ -63,7 +66,7 @@ If you already have a `ma.engine`, pass that. Keep the engine alive until the on
 
 Handwritten files in the same dialect (`ma.waveform_config_init`, `ma.noise_config_init`, `biquad_sweep`, `gain_env`, …) reopen as graphs. Arbitrary Odin that wanders off-dialect will not.
 
-`sounds/` is the example library (Zap, Thump, Whoosh). Treat those files the same way as anything you export: use them, change them, or ignore them.
+`sounds/` is the example library (Zap, Thump, Whoosh, Click, Hit, Pickup). Treat those files the same way as anything you export: use them, change them, or ignore them.
 
 WAV is optional. If you do not want to run the DSP, Bake and play the file with whatever you already use (`ma_decoder`, raylib `LoadSound`).
 
