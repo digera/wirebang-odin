@@ -441,6 +441,10 @@ ensure_node :: proc(
 	switch kind {
 	case .Filter:
 		d.q = 1
+	case .Delay:
+		d.time = 0.25
+		d.mix = 0.5
+		d.feedback = 0.3
 	case .Osc, .Noise, .Gain, .Shaper, .Panner, .Out:
 	}
 	drafts[name_key] = d
