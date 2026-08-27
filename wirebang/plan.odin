@@ -317,15 +317,23 @@ topo_sort_named :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator :=
 
 plan_duration :: proc(plan: Plan) -> f32 {
 	max_t: f32 = 0.05
+	max_delay_tail: f32 = 0
 	for n in plan.nodes {
 		if n.create.kind == .Noise {
 			max_t = max(max_t, n.create.duration)
+		}
+		if n.create.kind == .Delay {
+			tail := n.create.time
+			if n.create.feedback > 0 {
+				tail *= (1 + n.create.feedback * 3)
+			}
+			max_delay_tail = max(max_delay_tail, tail)
 		}
 		for a in n.actions {
 			max_t = max(max_t, a.time)
 		}
 	}
-	return max_t + 0.02
+	return max_t + max_delay_tail + 0.02
 }
 
 // Returns old-indices in tick order (inputs before dependents).
