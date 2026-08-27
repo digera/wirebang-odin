@@ -371,7 +371,7 @@ draw :: proc(app: ^App) {
 		}
 	}
 
-	lib_text := "Library;Zap;Thump;Whoosh"
+	lib_text := "Library;Zap;Thump;Whoosh;Click;Hit;Pickup"
 	prev := app.library_i
 	rl.GuiComboBox({530, 14, 140, 30}, strings.clone_to_cstring(lib_text, context.temp_allocator), &app.library_i)
 	if app.library_i != prev && app.library_i > 0 {
