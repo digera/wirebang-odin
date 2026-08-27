@@ -70,6 +70,10 @@ write_params_json :: proc(b: ^strings.Builder, node: Graph_Node) {
 		write(b, &first, "amount", "%g", p.amount)
 	case Panner_Params:
 		write(b, &first, "pan", "%g", p.pan)
+	case Delay_Params:
+		write(b, &first, "time", "%g", p.time)
+		write(b, &first, "mix", "%g", p.mix)
+		write(b, &first, "feedback", "%g", p.feedback)
 	}
 	if !first {
 		strings.write_byte(b, ' ')
@@ -244,6 +248,12 @@ params_from_json :: proc(kind: Node_Kind, obj: json.Object) -> Node_Params {
 	case .Panner:
 		p := d.(Panner_Params)
 		p.pan = obj_f32(obj, "pan", p.pan)
+		return p
+	case .Delay:
+		p := d.(Delay_Params)
+		p.time = obj_f32(obj, "time", p.time)
+		p.mix = obj_f32(obj, "mix", p.mix)
+		p.feedback = obj_f32(obj, "feedback", p.feedback)
 		return p
 	case .Out:
 		return nil

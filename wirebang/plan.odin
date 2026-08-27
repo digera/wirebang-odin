@@ -11,6 +11,7 @@ Create_Kind :: enum {
 	Gain,
 	Shaper,
 	Panner,
+	Delay,
 }
 
 Create_Op :: struct {
@@ -21,6 +22,9 @@ Create_Op :: struct {
 	q:        f32,
 	amount:   f32,
 	pan:      f32,
+	time:     f32,
+	mix:      f32,
+	feedback: f32,
 }
 
 Num_Expr :: struct {
@@ -166,6 +170,10 @@ plan_node :: proc(node: Graph_Node, allocator := context.allocator) -> (Planned_
 		p := node.params.(Panner_Params)
 		out.create = Create_Op{kind = .Panner, pan = p.pan}
 		return out, true
+	case .Delay:
+		p := node.params.(Delay_Params)
+		out.create = Create_Op{kind = .Delay, time = p.time, mix = p.mix, feedback = p.feedback}
+		return out, true
 	}
 	delete(out.actions)
 	return {}, false
@@ -178,7 +186,7 @@ kind_rank :: proc(k: Node_Kind) -> int {
 		return 0
 	case .Out:
 		return 2
-	case .Filter, .Gain, .Shaper, .Panner:
+	case .Filter, .Gain, .Shaper, .Panner, .Delay:
 		return 1
 	}
 	return 1
@@ -309,15 +317,23 @@ topo_sort_named :: proc(nodes: []Planned_Node, edges: []Graph_Edge, allocator :=
 
 plan_duration :: proc(plan: Plan) -> f32 {
 	max_t: f32 = 0.05
+	max_delay_tail: f32 = 0
 	for n in plan.nodes {
 		if n.create.kind == .Noise {
 			max_t = max(max_t, n.create.duration)
+		}
+		if n.create.kind == .Delay {
+			tail := n.create.time
+			if n.create.feedback > 0 {
+				tail *= (1 + n.create.feedback * 3)
+			}
+			max_delay_tail = max(max_delay_tail, tail)
 		}
 		for a in n.actions {
 			max_t = max(max_t, a.time)
 		}
 	}
-	return max_t + 0.02
+	return max_t + max_delay_tail + 0.02
 }
 
 // Returns old-indices in tick order (inputs before dependents).

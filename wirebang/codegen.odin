@@ -60,6 +60,8 @@ generate_code :: proc(patch: Patch, opts := Emit_Options{}, allocator := context
 			need.shaper = true
 		case .Panner:
 			need.panner = true
+		case .Delay:
+			need.delay = true
 		}
 		if len(inputs[i]) >= 2 {
 			need.mix = true
@@ -349,6 +351,19 @@ emit_node :: proc(b: ^strings.Builder, plan: Plan, names: []string, inputs: [][d
 		fmt.sbprintf(b, "\t%s_buf := make([]f32, frames * 2)\n", name)
 		fmt.sbprintf(b, "\tdefer delete(%s_buf)\n", name)
 		fmt.sbprintf(b, "\tpan_to_stereo(%s, %s_buf, %s)\n", in_expr, name, fmt_f32(node.create.pan))
+	case .Delay:
+		in_expr := emit_input(b, plan, names, inputs, i)
+		fmt.sbprintf(b, "\t%s_buf := make([]f32, frames)\n", name)
+		fmt.sbprintf(b, "\tdefer delete(%s_buf)\n", name)
+		fmt.sbprintf(
+			b,
+			"\tdelay_line(%s, %s_buf, sr, %s, %s, %s)\n",
+			in_expr,
+			name,
+			fmt_f32(node.create.time),
+			fmt_f32(node.create.mix),
+			fmt_f32(node.create.feedback),
+		)
 	}
 }
 

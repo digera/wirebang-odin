@@ -81,6 +81,80 @@ test_parse_roundtrip_library :: proc(t: ^testing.T) {
 	}
 }
 
+@(test)
+test_delay_codegen_and_parse :: proc(t: ^testing.T) {
+	p := empty_patch()
+	defer destroy_patch(&p)
+	set_owned_string(&p.name, "DelayTest")
+	set_owned_string(&p.fn_name, "play_delay_test")
+	osc := add_node(&p, .Osc, 10, 10)
+	if osc_n := find_node_ptr(&p, osc.id); osc_n != nil {
+		osc_n.params = Osc_Params{type = .Sine, freq = 440, freq_end = 220, ramp = .Exp, duration = 0.1, delay = 0, jitter = 0}
+	}
+	delay := add_node(&p, .Delay, 200, 10)
+	if del_n := find_node_ptr(&p, delay.id); del_n != nil {
+		del_n.params = Delay_Params{time = 0.15, mix = 0.6, feedback = 0.35}
+	}
+	connect(&p, osc.id, delay.id)
+	connect(&p, delay.id, "out")
+	src := generate_code(p, {package_name = "sfx"})
+	defer delete(src)
+	testing.expect(t, strings_contains(src, "delay_line"))
+	testing.expect(t, strings_contains(src, "0.15"))
+	testing.expect(t, strings_contains(src, "0.6"))
+	testing.expect(t, strings_contains(src, "0.35"))
+	got, ok := parse_code(src)
+	defer destroy_patch(&got)
+	testing.expect(t, ok)
+	testing.expect(t, is_patch(got))
+	testing.expect_value(t, len(got.nodes), 3)
+	testing.expect_value(t, len(got.edges), 2)
+	delay_found := false
+	for n in got.nodes {
+		if n.kind == .Delay {
+			dp := n.params.(Delay_Params)
+			testing.expect(t, abs(dp.time - 0.15) < 0.001)
+			testing.expect(t, abs(dp.mix - 0.6) < 0.001)
+			testing.expect(t, abs(dp.feedback - 0.35) < 0.001)
+			delay_found = true
+		}
+	}
+	testing.expect(t, delay_found)
+}
+
+@(test)
+test_delay_voice_produces_tail :: proc(t: ^testing.T) {
+	p := empty_patch()
+	defer destroy_patch(&p)
+	osc := add_node(&p, .Osc, 10, 10)
+	if osc_n := find_node_ptr(&p, osc.id); osc_n != nil {
+		osc_n.params = Osc_Params{type = .Sine, freq = 440, freq_end = 220, ramp = .Exp, duration = 0.05, delay = 0, jitter = 0}
+	}
+	delay := add_node(&p, .Delay, 200, 10)
+	if del_n := find_node_ptr(&p, delay.id); del_n != nil {
+		del_n.params = Delay_Params{time = 0.1, mix = 0.5, feedback = 0.3}
+	}
+	connect(&p, osc.id, delay.id)
+	connect(&p, delay.id, "out")
+	plan := plan_patch(p, context.temp_allocator)
+	defer destroy_plan(&plan)
+	voice := voice_from_plan(plan, DEFAULT_SAMPLE_RATE, context.temp_allocator)
+	defer destroy_voice(&voice)
+	dry_end_frame := u64(0.05 * DEFAULT_SAMPLE_RATE)
+	tail_start_frame := u64(0.15 * DEFAULT_SAMPLE_RATE)
+	tail_energy: f32
+	for voice.frame < tail_start_frame + 1000 {
+		l, r, ok := voice_tick(&voice)
+		if !ok {
+			break
+		}
+		if voice.frame > tail_start_frame {
+			tail_energy += abs(l) + abs(r)
+		}
+	}
+	testing.expectf(t, tail_energy > 0.01, "expected delay tail energy, got %v", tail_energy)
+}
+
 @(private)
 strings_contains :: proc(s, sub: string) -> bool {
 	if len(sub) == 0 {
