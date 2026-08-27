@@ -39,6 +39,8 @@ kind_color :: proc(kind: wb.Node_Kind) -> rl.Color {
 		return {255, 143, 122, 255}
 	case .Panner:
 		return {154, 208, 255, 255}
+	case .Delay:
+		return {255, 195, 160, 255}
 	case .Out:
 		return {201, 211, 224, 255}
 	}

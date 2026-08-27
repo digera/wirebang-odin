@@ -11,6 +11,7 @@ Create_Kind :: enum {
 	Gain,
 	Shaper,
 	Panner,
+	Delay,
 }
 
 Create_Op :: struct {
@@ -21,6 +22,9 @@ Create_Op :: struct {
 	q:        f32,
 	amount:   f32,
 	pan:      f32,
+	time:     f32,
+	mix:      f32,
+	feedback: f32,
 }
 
 Num_Expr :: struct {
@@ -166,6 +170,10 @@ plan_node :: proc(node: Graph_Node, allocator := context.allocator) -> (Planned_
 		p := node.params.(Panner_Params)
 		out.create = Create_Op{kind = .Panner, pan = p.pan}
 		return out, true
+	case .Delay:
+		p := node.params.(Delay_Params)
+		out.create = Create_Op{kind = .Delay, time = p.time, mix = p.mix, feedback = p.feedback}
+		return out, true
 	}
 	delete(out.actions)
 	return {}, false
@@ -178,7 +186,7 @@ kind_rank :: proc(k: Node_Kind) -> int {
 		return 0
 	case .Out:
 		return 2
-	case .Filter, .Gain, .Shaper, .Panner:
+	case .Filter, .Gain, .Shaper, .Panner, .Delay:
 		return 1
 	}
 	return 1

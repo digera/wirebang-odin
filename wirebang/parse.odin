@@ -86,6 +86,7 @@ Draft :: struct {
 	start, stop:          f32,
 	has_start, has_stop:  bool,
 	has_ramp:             bool,
+	time, mix, feedback:  f32,
 }
 
 @(private)
@@ -736,6 +737,23 @@ apply_call :: proc(
 		}
 		from := resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^)
 		add_edges(p, from, d.id, taken, allocator)
+	case "delay_line":
+		if len(args) < 6 {
+			return false
+		}
+		name := buf_stem(args[1])
+		d := ensure_node(p, taken, name_to_id, drafts, buf_to_id, .Delay, name, allocator)
+		if n, ok := parse_num(args[3]); ok {
+			d.time = n.value
+		}
+		if n, ok := parse_num(args[4]); ok {
+			d.mix = n.value
+		}
+		if n, ok := parse_num(args[5]); ok {
+			d.feedback = n.value
+		}
+		from := resolve_sources(args[0], name_to_id^, buf_to_id^, mix_ids^)
+		add_edges(p, from, d.id, taken, allocator)
 	case "add_stereo", "add_mono_to_stereo":
 		if len(args) < 2 {
 			return false
@@ -790,6 +808,8 @@ apply_draft :: proc(node: ^Graph_Node, d: Draft) {
 		node.params = Shaper_Params{amount = d.amount}
 	case .Panner:
 		node.params = Panner_Params{pan = d.pan}
+	case .Delay:
+		node.params = Delay_Params{time = d.time, mix = d.mix, feedback = d.feedback}
 	case .Out:
 	}
 }

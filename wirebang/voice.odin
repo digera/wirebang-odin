@@ -36,6 +36,11 @@ Voice_Node :: struct {
 	last_freq:  f32,
 	amount:     f32,
 	pan:        f32,
+	delay_time: f32,
+	delay_mix:  f32,
+	delay_fb:   f32,
+	delay_buf:  []f32,
+	delay_pos:  int,
 	inputs:     [dynamic]int,
 	to_out:     bool,
 	stereo:     bool,
@@ -60,6 +65,7 @@ destroy_voice :: proc(v: ^Voice) {
 		delete(n.freq)
 		delete(n.gain)
 		delete(n.noise)
+		delete(n.delay_buf)
 		delete(n.inputs)
 	}
 	delete(v.nodes)
@@ -229,6 +235,13 @@ voice_from_plan :: proc(plan: Plan, sample_rate: f32 = DEFAULT_SAMPLE_RATE, allo
 			vn.kind = .Panner
 			vn.pan = planned.create.pan
 			vn.stereo = true
+		case .Delay:
+			vn.kind = .Delay
+			vn.delay_time = planned.create.time
+			vn.delay_mix = planned.create.mix
+			vn.delay_fb = planned.create.feedback
+			buf_len := int(math.ceil(f64(sample_rate * planned.create.time))) + 1
+			vn.delay_buf = make([]f32, buf_len, allocator)
 		}
 		for a in planned.actions {
 			switch a.kind {
@@ -347,6 +360,16 @@ voice_tick :: proc(v: ^Voice) -> (left, right: f32, ok: bool) {
 			angle := (n.pan + 1) * (math.PI * 0.25)
 			n.left = x * math.cos(angle)
 			n.right = x * math.sin(angle)
+		case .Delay:
+			x := mix_inputs(v, &n)
+			if len(n.delay_buf) > 0 {
+				tap := n.delay_buf[n.delay_pos]
+				n.delay_buf[n.delay_pos] = x + tap * n.delay_fb
+				n.delay_pos = (n.delay_pos + 1) % len(n.delay_buf)
+				n.mono = x * (1 - n.delay_mix) + tap * n.delay_mix
+			} else {
+				n.mono = x
+			}
 		case .Out:
 		}
 		if !n.stereo {

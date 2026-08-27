@@ -10,6 +10,7 @@ Helper_Need :: struct {
 	gain:       bool,
 	shaper:     bool,
 	panner:     bool,
+	delay:      bool,
 	mix:        bool,
 	add_mono:   bool,
 	add_stereo: bool,
@@ -36,6 +37,9 @@ write_helpers :: proc(b: ^strings.Builder, need: Helper_Need) {
 	}
 	if need.panner {
 		strings.write_string(b, HELPER_PAN)
+	}
+	if need.delay {
+		strings.write_string(b, HELPER_DELAY)
 	}
 	if need.mix {
 		strings.write_string(b, HELPER_MIX)
@@ -233,6 +237,24 @@ pan_to_stereo :: proc(in_buf, out_buf: []f32, pan: f32) {
 	for i in 0 ..< n {
 		out_buf[i * 2] = in_buf[i] * l
 		out_buf[i * 2 + 1] = in_buf[i] * r
+	}
+}
+`
+
+@(private)
+HELPER_DELAY :: `
+@(private="file")
+delay_line :: proc(in_buf, out_buf: []f32, sr: u32, time, mix, feedback: f32) {
+	n := min(len(in_buf), len(out_buf))
+	buf_len := int(math.ceil_f64(f64(sr) * f64(time))) + 1
+	delay_buf := make([]f32, buf_len)
+	defer delete(delay_buf)
+	pos := 0
+	for i in 0 ..< n {
+		tap := delay_buf[pos]
+		delay_buf[pos] = in_buf[i] + tap * feedback
+		pos = (pos + 1) % buf_len
+		out_buf[i] = in_buf[i] * (1 - mix) + tap * mix
 	}
 }
 `

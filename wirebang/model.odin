@@ -12,6 +12,7 @@ Node_Kind :: enum {
 	Gain,
 	Shaper,
 	Panner,
+	Delay,
 	Out,
 }
 
@@ -73,6 +74,12 @@ Panner_Params :: struct {
 	pan: f32,
 }
 
+Delay_Params :: struct {
+	time:     f32,
+	mix:      f32,
+	feedback: f32,
+}
+
 Node_Params :: union {
 	Osc_Params,
 	Noise_Params,
@@ -80,6 +87,7 @@ Node_Params :: union {
 	Gain_Params,
 	Shaper_Params,
 	Panner_Params,
+	Delay_Params,
 }
 
 Graph_Node :: struct {
@@ -158,6 +166,12 @@ PANNER_PARAM_SPECS := [?]Param_Spec {
 	{key = "pan", label = "Pan", kind = .Number, min = -1, max = 1, step = 0.01},
 }
 
+DELAY_PARAM_SPECS := [?]Param_Spec {
+	{key = "time", label = "Time", kind = .Number, min = 0.001, max = 2, step = 0.001, unit = "s"},
+	{key = "mix", label = "Mix", kind = .Number, min = 0, max = 1, step = 0.01},
+	{key = "feedback", label = "Feedback", kind = .Number, min = 0, max = 0.95, step = 0.01},
+}
+
 params_for :: proc(kind: Node_Kind) -> []Param_Spec {
 	switch kind {
 	case .Osc:
@@ -172,6 +186,8 @@ params_for :: proc(kind: Node_Kind) -> []Param_Spec {
 		return SHAPER_PARAM_SPECS[:]
 	case .Panner:
 		return PANNER_PARAM_SPECS[:]
+	case .Delay:
+		return DELAY_PARAM_SPECS[:]
 	case .Out:
 		return {}
 	}
@@ -192,6 +208,8 @@ defaults_for :: proc(kind: Node_Kind) -> Node_Params {
 		return Shaper_Params{amount = 6}
 	case .Panner:
 		return Panner_Params{pan = 0}
+	case .Delay:
+		return Delay_Params{time = 0.25, mix = 0.5, feedback = 0.3}
 	case .Out:
 		return nil
 	}
@@ -220,6 +238,8 @@ kind_label :: proc(kind: Node_Kind) -> string {
 		return "Shaper"
 	case .Panner:
 		return "Panner"
+	case .Delay:
+		return "Delay"
 	case .Out:
 		return "Out"
 	}
@@ -240,6 +260,8 @@ kind_key :: proc(kind: Node_Kind) -> string {
 		return "shaper"
 	case .Panner:
 		return "panner"
+	case .Delay:
+		return "delay"
 	case .Out:
 		return "out"
 	}
@@ -260,6 +282,8 @@ kind_from_key :: proc(key: string) -> (Node_Kind, bool) {
 		return .Shaper, true
 	case "panner":
 		return .Panner, true
+	case "delay":
+		return .Delay, true
 	case "out":
 		return .Out, true
 	}
@@ -533,6 +557,9 @@ params_ok :: proc(node: Graph_Node) -> bool {
 	case .Panner:
 		_, ok := node.params.(Panner_Params)
 		return ok
+	case .Delay:
+		_, ok := node.params.(Delay_Params)
+		return ok
 	case .Out:
 		return node.params == nil
 	}
@@ -735,6 +762,7 @@ disconnect :: proc(patch: ^Patch, edge_id: string) {
 
 patch_duration :: proc(patch: Patch) -> f32 {
 	max_t: f32 = 0.05
+	max_delay_tail: f32 = 0
 	for n in patch.nodes {
 		switch p in n.params {
 		case Osc_Params:
@@ -745,11 +773,17 @@ patch_duration :: proc(patch: Patch) -> f32 {
 			max_t = max(max_t, p.delay + max(p.duration, 0.03))
 		case Filter_Params:
 			max_t = max(max_t, p.ramp_time)
+		case Delay_Params:
+			tail := p.time
+			if p.feedback > 0 {
+				tail *= (1 + p.feedback * 3)
+			}
+			max_delay_tail = max(max_delay_tail, tail)
 		case Shaper_Params, Panner_Params:
 		case:
 		}
 	}
-	return max_t + 0.02
+	return max_t + max_delay_tail + 0.02
 }
 
 param_f32 :: proc(node: Graph_Node, key: string, fallback: f32 = 0) -> f32 {
@@ -805,6 +839,15 @@ param_f32 :: proc(node: Graph_Node, key: string, fallback: f32 = 0) -> f32 {
 	case Panner_Params:
 		if key == "pan" {
 			return p.pan
+		}
+	case Delay_Params:
+		switch key {
+		case "time":
+			return p.time
+		case "mix":
+			return p.mix
+		case "feedback":
+			return p.feedback
 		}
 	}
 	return fallback
@@ -864,6 +907,15 @@ set_param_f32 :: proc(node: ^Graph_Node, key: string, value: f32) {
 		if key == "pan" {
 			p.pan = value
 		}
+	case Delay_Params:
+		switch key {
+		case "time":
+			p.time = value
+		case "mix":
+			p.mix = value
+		case "feedback":
+			p.feedback = value
+		}
 	}
 }
 
@@ -880,7 +932,7 @@ param_enum :: proc(node: Graph_Node, key: string) -> string {
 		if key == "type" {
 			return filter_type_key(p.type)
 		}
-	case Noise_Params, Gain_Params, Shaper_Params, Panner_Params:
+	case Noise_Params, Gain_Params, Shaper_Params, Panner_Params, Delay_Params:
 	}
 	return ""
 }
@@ -901,7 +953,7 @@ set_param_enum :: proc(node: ^Graph_Node, key, value: string) {
 				p.type = t
 			}
 		}
-	case Noise_Params, Gain_Params, Shaper_Params, Panner_Params:
+	case Noise_Params, Gain_Params, Shaper_Params, Panner_Params, Delay_Params:
 	}
 }
 
@@ -919,6 +971,8 @@ node_summary :: proc(node: Graph_Node, allocator := context.allocator) -> string
 		return fmt.aprintf("drive %.0f", p.amount, allocator = allocator)
 	case Panner_Params:
 		return fmt.aprintf("pan %.2f", p.pan, allocator = allocator)
+	case Delay_Params:
+		return fmt.aprintf("%.0fms", p.time * 1000, allocator = allocator)
 	}
 	return strings.clone("destination", allocator)
 }

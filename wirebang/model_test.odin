@@ -89,3 +89,46 @@ test_library_patches_valid :: proc(t: ^testing.T) {
 		testing.expectf(t, is_patch(p), "%s should be a valid patch", entry.label)
 	}
 }
+
+@(test)
+test_delay_node_valid :: proc(t: ^testing.T) {
+	p := empty_patch()
+	defer destroy_patch(&p)
+	osc := add_node(&p, .Osc, 10, 10)
+	delay := add_node(&p, .Delay, 200, 10)
+	connect(&p, osc.id, delay.id)
+	connect(&p, delay.id, "out")
+	testing.expect(t, is_patch(p))
+	testing.expect(t, len(p.nodes) == 3)
+	testing.expect(t, len(p.edges) == 2)
+	found_delay := false
+	for n in p.nodes {
+		if n.kind == .Delay {
+			dp, ok := n.params.(Delay_Params)
+			testing.expect(t, ok)
+			testing.expect(t, dp.time > 0)
+			testing.expect(t, dp.mix >= 0 && dp.mix <= 1)
+			testing.expect(t, dp.feedback >= 0 && dp.feedback < 1)
+			found_delay = true
+		}
+	}
+	testing.expect(t, found_delay)
+}
+
+@(test)
+test_delay_patch_duration :: proc(t: ^testing.T) {
+	p := empty_patch()
+	defer destroy_patch(&p)
+	osc := add_node(&p, .Osc, 10, 10)
+	if osc_n := find_node_ptr(&p, osc.id); osc_n != nil {
+		osc_n.params = Osc_Params{type = .Sine, freq = 440, freq_end = 220, ramp = .Exp, duration = 0.05, delay = 0, jitter = 0}
+	}
+	delay := add_node(&p, .Delay, 200, 10)
+	if del_n := find_node_ptr(&p, delay.id); del_n != nil {
+		del_n.params = Delay_Params{time = 0.2, mix = 0.5, feedback = 0.4}
+	}
+	connect(&p, osc.id, delay.id)
+	connect(&p, delay.id, "out")
+	dur := patch_duration(p)
+	testing.expect(t, dur > 0.05 + 0.2)
+}
