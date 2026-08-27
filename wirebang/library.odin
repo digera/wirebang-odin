@@ -94,8 +94,84 @@ library_whoosh :: proc(allocator := context.allocator) -> Patch {
 	return patch_from_slices("Whoosh", "play_whoosh", WHOOSH_NODES[:], WHOOSH_EDGES[:], allocator)
 }
 
+CLICK_NODES := [?]Graph_Node {
+	{id = "out", kind = .Out, x = 700, y = 180, name = "out"},
+	{id = "osc_1", kind = .Osc, x = 40, y = 80, name = "tick", params = Osc_Params{type = .Triangle, freq = 2200, freq_end = 900, ramp = .Exp, duration = 0.012, delay = 0, jitter = 0.06}},
+	{id = "gain_1", kind = .Gain, x = 260, y = 80, name = "tickAmp", params = Gain_Params{peak = 0.22, duration = 0.012, delay = 0, jitter = 0.05}},
+	{id = "noise_1", kind = .Noise, x = 40, y = 260, name = "tickAir", params = Noise_Params{duration = 0.008, delay = 0}},
+	{id = "filter_1", kind = .Filter, x = 260, y = 260, name = "tickHp", params = Filter_Params{type = .Highpass, freq = 4200, freq_end = 0, q = 0.7, ramp_time = 0, jitter = 0}},
+	{id = "gain_2", kind = .Gain, x = 480, y = 260, name = "tickAirAmp", params = Gain_Params{peak = 0.07, duration = 0.008, delay = 0, jitter = 0.08}},
+}
+
+CLICK_EDGES := [?]Graph_Edge {
+	{id = "e_1", from = "osc_1", to = "gain_1"},
+	{id = "e_2", from = "gain_1", to = "out"},
+	{id = "e_3", from = "noise_1", to = "filter_1"},
+	{id = "e_4", from = "filter_1", to = "gain_2"},
+	{id = "e_5", from = "gain_2", to = "out"},
+}
+
+HIT_NODES := [?]Graph_Node {
+	{id = "out", kind = .Out, x = 760, y = 260, name = "out"},
+	{id = "noise_1", kind = .Noise, x = 40, y = 40, name = "crack", params = Noise_Params{duration = 0.03, delay = 0}},
+	{id = "filter_1", kind = .Filter, x = 200, y = 40, name = "crackBp", params = Filter_Params{type = .Bandpass, freq = 1600, freq_end = 380, q = 1.2, ramp_time = 0.025, jitter = 0.1}},
+	{id = "shaper_1", kind = .Shaper, x = 380, y = 40, name = "smash", params = Shaper_Params{amount = 8}},
+	{id = "gain_1", kind = .Gain, x = 560, y = 40, name = "crackGain", params = Gain_Params{peak = 0.24, duration = 0.03, delay = 0, jitter = 0.08}},
+	{id = "osc_1", kind = .Osc, x = 40, y = 220, name = "body", params = Osc_Params{type = .Sine, freq = 140, freq_end = 48, ramp = .Exp, duration = 0.1, delay = 0, jitter = 0.06}},
+	{id = "gain_2", kind = .Gain, x = 280, y = 220, name = "bodyGain", params = Gain_Params{peak = 0.32, duration = 0.1, delay = 0, jitter = 0.05}},
+	{id = "osc_2", kind = .Osc, x = 40, y = 400, name = "edge", params = Osc_Params{type = .Square, freq = 320, freq_end = 90, ramp = .Exp, duration = 0.022, delay = 0, jitter = 0.1}},
+	{id = "gain_3", kind = .Gain, x = 280, y = 400, name = "edgeGain", params = Gain_Params{peak = 0.07, duration = 0.022, delay = 0, jitter = 0.1}},
+}
+
+HIT_EDGES := [?]Graph_Edge {
+	{id = "e_1", from = "noise_1", to = "filter_1"},
+	{id = "e_2", from = "filter_1", to = "shaper_1"},
+	{id = "e_3", from = "shaper_1", to = "gain_1"},
+	{id = "e_4", from = "gain_1", to = "out"},
+	{id = "e_5", from = "osc_1", to = "gain_2"},
+	{id = "e_6", from = "gain_2", to = "out"},
+	{id = "e_7", from = "osc_2", to = "gain_3"},
+	{id = "e_8", from = "gain_3", to = "out"},
+}
+
+PICKUP_NODES := [?]Graph_Node {
+	{id = "out", kind = .Out, x = 780, y = 260, name = "out"},
+	{id = "osc_1", kind = .Osc, x = 40, y = 60, name = "pluck", params = Osc_Params{type = .Triangle, freq = 520, freq_end = 780, ramp = .Lin, duration = 0.06, delay = 0, jitter = 0.04}},
+	{id = "gain_1", kind = .Gain, x = 280, y = 60, name = "pluckAmp", params = Gain_Params{peak = 0.20, duration = 0.06, delay = 0, jitter = 0.04}},
+	{id = "osc_2", kind = .Osc, x = 40, y = 200, name = "chime", params = Osc_Params{type = .Sine, freq = 880, freq_end = 1320, ramp = .Lin, duration = 0.12, delay = 0.05, jitter = 0.03}},
+	{id = "gain_2", kind = .Gain, x = 280, y = 200, name = "chimeAmp", params = Gain_Params{peak = 0.16, duration = 0.12, delay = 0.05, jitter = 0.04}},
+	{id = "noise_1", kind = .Noise, x = 40, y = 360, name = "sparkle", params = Noise_Params{duration = 0.04, delay = 0.05}},
+	{id = "filter_1", kind = .Filter, x = 260, y = 360, name = "sparkleBp", params = Filter_Params{type = .Bandpass, freq = 5000, freq_end = 7000, q = 3.5, ramp_time = 0.04, jitter = 0.05}},
+	{id = "gain_3", kind = .Gain, x = 500, y = 360, name = "sparkleAmp", params = Gain_Params{peak = 0.05, duration = 0.04, delay = 0.05, jitter = 0.08}},
+}
+
+PICKUP_EDGES := [?]Graph_Edge {
+	{id = "e_1", from = "osc_1", to = "gain_1"},
+	{id = "e_2", from = "gain_1", to = "out"},
+	{id = "e_3", from = "osc_2", to = "gain_2"},
+	{id = "e_4", from = "gain_2", to = "out"},
+	{id = "e_5", from = "noise_1", to = "filter_1"},
+	{id = "e_6", from = "filter_1", to = "gain_3"},
+	{id = "e_7", from = "gain_3", to = "out"},
+}
+
+library_click :: proc(allocator := context.allocator) -> Patch {
+	return patch_from_slices("Click", "play_click", CLICK_NODES[:], CLICK_EDGES[:], allocator)
+}
+
+library_hit :: proc(allocator := context.allocator) -> Patch {
+	return patch_from_slices("Hit", "play_hit", HIT_NODES[:], HIT_EDGES[:], allocator)
+}
+
+library_pickup :: proc(allocator := context.allocator) -> Patch {
+	return patch_from_slices("Pickup", "play_pickup", PICKUP_NODES[:], PICKUP_EDGES[:], allocator)
+}
+
 LIBRARY := [?]Library_Entry {
 	{id = "zap", label = "Zap", patch = library_zap},
 	{id = "thump", label = "Thump", patch = library_thump},
 	{id = "whoosh", label = "Whoosh", patch = library_whoosh},
+	{id = "click", label = "Click", patch = library_click},
+	{id = "hit", label = "Hit", patch = library_hit},
+	{id = "pickup", label = "Pickup", patch = library_pickup},
 }
