@@ -430,7 +430,7 @@ draw :: proc(app: ^App) {
 
 	rl.DrawRectangle(0, BAR_H, PAL_W, i32(h - BAR_H), PANEL)
 	rl.DrawLine(PAL_W, BAR_H, PAL_W, i32(h), LINE)
-	kinds := [?]wb.Node_Kind{.Osc, .Noise, .Filter, .Gain, .Shaper, .Panner}
+	kinds := [?]wb.Node_Kind{.Osc, .Noise, .Filter, .Gain, .Shaper, .Panner, .Delay}
 	for kind, i in kinds {
 		r := rl.Rectangle{12, f32(BAR_H + 12 + i * 48), PAL_W - 24, 40}
 		if button(r, wb.kind_label(kind)) {
